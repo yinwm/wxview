@@ -1,0 +1,43 @@
+# External reference repos
+/wechat-decrypt/
+
+# Build outputs and caches
+/.cache/
+/bin/
+/dist/
+/weview
+*.test
+*.out
+coverage.out
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+keys.json
+all_keys.json
+*.key
+*.pem
+
+# Weview / WeChat runtime state and sensitive local data
+/.weview/
+/cache/
+/data/
+/tmp/
+*.sock
+*.pid
+*.log
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.dat
+*.silk
+*.wav
+*.mp3
