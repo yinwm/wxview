@@ -186,15 +186,22 @@ func contactsUsage(w io.Writer) {
 	fmt.Fprintln(w, `weview contacts - List WeChat contacts and contact-table groups
 
 Usage:
+  weview contacts
   weview contacts [--format table|json|jsonl] [--kind all|friend|chatroom|other] [--refresh]
+  weview contacts --help
+  weview contact
   weview contact  [--format table|json|jsonl] [--kind all|friend|chatroom|other] [--refresh]
 
+No-argument behavior:
+  weview contacts is intentionally the same as weview contacts --help.
+  To query data, pass an explicit output/filter flag such as --format or --kind.
+
 Flags:
-  --format table   Human-readable table output. This is the default.
+  --format table   Human-readable table output.
   --format json    Machine-readable JSON array.
   --format jsonl   Machine-readable newline-delimited JSON, one contact per line.
 
-  --kind all       Return every row selected from the contact table. Default.
+  --kind all       Return every row selected from the contact table.
   --kind friend    Ordinary private-chat contacts:
                    local_type = 1, username not ending in @chatroom, username not starting with gh_.
   --kind chatroom  Groups visible in the contact table:
@@ -215,11 +222,12 @@ Output fields:
   kind        friend, chatroom, or other.
 
 Examples for humans:
-  weview contacts
-  weview contacts --kind friend
-  weview contacts --kind chatroom
+  weview contacts --format table
+  weview contacts --kind friend --format table
+  weview contacts --kind chatroom --format table
 
 Examples for AI/tools:
+  weview contacts --format json
   weview contacts --kind friend --format json
   weview contacts --kind chatroom --format jsonl
   weview contacts --refresh --format json
@@ -293,7 +301,7 @@ func runDaemon(args []string, stdout io.Writer) error {
 }
 
 func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
-	if hasHelp(args) {
+	if len(args) == 0 || hasHelp(args) {
 		contactsUsage(stdout)
 		return nil
 	}

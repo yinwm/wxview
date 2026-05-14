@@ -42,6 +42,23 @@ func TestContactsHelpIsActionable(t *testing.T) {
 	}
 }
 
+func TestContactsWithoutArgsShowsHelp(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"contacts"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview contacts - List WeChat contacts",
+		"No-argument behavior",
+		"weview contacts is intentionally the same as weview contacts --help",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("contacts no-arg help missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestContractHelpTypoAlias(t *testing.T) {
 	var out bytes.Buffer
 	if err := run([]string{"contract", "--help"}, &out, &out); err != nil {

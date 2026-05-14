@@ -27,13 +27,15 @@ go run ./cmd/weview daemon
 go run ./cmd/weview contacts --format table
 go run ./cmd/weview contacts --format json
 go run ./cmd/weview contacts --format jsonl
-go run ./cmd/weview contacts --refresh
-go run ./cmd/weview contacts --kind friend
-go run ./cmd/weview contacts --kind chatroom
+go run ./cmd/weview contacts --refresh --format json
+go run ./cmd/weview contacts --kind friend --format table
+go run ./cmd/weview contacts --kind chatroom --format table
 go run ./cmd/weview contacts --help
 ```
 
-`weview contacts` uses the daemon when it is running. If the daemon is not running, it performs a local ensure-key, decrypt, and query pass.
+`weview contacts` with no flags shows help. To query data, pass an explicit flag such as `--format` or `--kind`.
+
+Contact queries use the daemon when it is running. If the daemon is not running, they read or refresh the local decrypted cache directly.
 
 Run `weview init` at the beginning. In normal use it only needs to be run once;
 it saves the verified contact DB key to `~/.weview/keys.json`.
