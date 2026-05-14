@@ -372,6 +372,14 @@ sudo chown -R "$USER":staff ~/.weview
 - macOS 允许当前终端读取目标进程。
 - 某些 Hardened Runtime 构建可能需要本地研究环境下重新签名微信并开启 `get-task-allow`。
 
+## 致谢
+
+Weview 的实现过程中参考并受益于这些开源项目：
+
+- 特别感谢 [wechat-decrypt](https://github.com/ylytdeng/wechat-decrypt)：这个项目提供了 macOS 微信数据库解密方向上的关键参考，是 Weview 能够落地本地解密与缓存流程的重要基础。
+- 感谢 [wechat-cli](https://github.com/huohuoer/wechat-cli)：它在本地微信数据 CLI 化、查询体验和使用场景上提供了有价值的参考。
+- 感谢 [wx-cli](https://github.com/jackwener/wx-cli)：它在命令设计、媒体解析和面向自动化使用的数据输出上提供了有价值的参考。
+
 ## V1 边界
 
 当前版本只支持：
