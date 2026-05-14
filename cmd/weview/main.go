@@ -174,7 +174,6 @@ What it does:
 Internal daemon actions:
   health
   refresh_contacts
-  list_contacts
 
 Notes:
   This is an internal local transport, not a public Web API.
@@ -251,9 +250,9 @@ Examples for AI/tools:
   weview contacts --refresh --format json
 
 Runtime behavior:
-  If the daemon is running, this command uses ~/.weview/weview.sock.
-  If the daemon is not running, it reads or refreshes the local decrypted cache
-  directly.`)
+  This command always reads contacts from the local decrypted cache.
+  If --refresh is used and the daemon is running, it asks the daemon to refresh
+  the cache first; otherwise it refreshes the cache in this process.`)
 }
 
 func hasHelp(args []string) bool {
@@ -376,41 +375,49 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func listContacts(ctx context.Context, refresh bool) ([]contacts.Contact, error) {
-	socketPath, err := app.SocketPath()
+	cachePath, err := contactCachePath(ctx, refresh)
 	if err != nil {
 		return nil, err
 	}
-	client := daemon.Client{SocketPath: socketPath, Timeout: 5 * time.Second}
-	if client.Healthy(ctx) {
-		if refresh {
-			if _, err := client.Call(ctx, daemon.ActionRefreshContacts); err != nil {
-				return nil, err
-			}
+	return contacts.NewService(cachePath).List(ctx)
+}
+
+func contactCachePath(ctx context.Context, refresh bool) (string, error) {
+	if refresh {
+		if err := refreshContactCache(ctx); err != nil {
+			return "", err
 		}
-		resp, err := client.Call(ctx, daemon.ActionListContacts)
-		if err != nil {
-			return nil, err
+		if _, path, ok := key.HasContactCache(); ok {
+			return path, nil
 		}
-		return resp.Contacts, nil
+		return "", fmt.Errorf("contact cache was not found after refresh")
 	}
 
-	var cachePath string
-	if refresh {
-		_, path, err := key.EnsureContactCache(ctx)
-		if err != nil {
-			return nil, err
-		}
-		cachePath = path
-	} else if _, path, ok := key.HasContactCache(); ok {
-		cachePath = path
-	} else {
-		_, path, err := key.EnsureContactCache(ctx)
-		if err != nil {
-			return nil, err
-		}
-		cachePath = path
+	if _, path, ok := key.HasContactCache(); ok {
+		return path, nil
 	}
-	return contacts.NewService(cachePath).List(ctx)
+	_, path, err := key.EnsureContactCache(ctx)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func refreshContactCache(ctx context.Context) error {
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: 5 * time.Second}
+	if client.Healthy(ctx) {
+		_, err := client.Call(ctx, daemon.ActionRefreshContacts)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	_, _, err = key.EnsureContactCache(ctx)
+	return err
 }
 
 func validFormat(format string) bool {

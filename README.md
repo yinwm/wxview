@@ -21,7 +21,7 @@ V1 先从 macOS 微信 4.x 的联系人数据开始：自动获取 `contact/cont
 - 自动获取并验证 `contact/contact.db` 的 SQLCipher raw key。
 - 解密主数据库 `contact/contact.db` 到本地缓存：
   `~/.weview/cache/<account>/contact/contact.db`
-- 启动本地 daemon，通过 `~/.weview/weview.sock` 做准实时刷新。
+- 启动本地 daemon，通过 `~/.weview/weview.sock` 触发刷新，本地缓存做准实时维护。
 - 通过 CLI 查询联系人、普通私聊联系人、群和其他联系人表记录。
 - 支持 `table`、`json`、`jsonl`、`csv` 输出。
 - 支持搜索、精确 username 查询、分页、排序和计数。
@@ -59,6 +59,7 @@ daemon 使用本地 Unix socket：
 ```
 
 这个 socket 是内部传输，不是公开 Web API。
+daemon 只负责维护缓存和响应刷新请求，不负责联系人查询。
 
 ### `weview contacts`
 
@@ -72,6 +73,8 @@ go run ./cmd/weview contacts --format csv
 ```
 
 `weview contacts` 不带参数时只显示帮助，不直接查询数据。要查询数据，需要显式传入 `--format`、`--kind`、`--count` 等参数。
+
+`weview contacts` 始终直接读取本地解密缓存。使用 `--refresh` 时，如果 daemon 正在运行，会先请求 daemon 刷新缓存；如果 daemon 没运行，就在当前进程里刷新一次缓存。
 
 常用查询：
 

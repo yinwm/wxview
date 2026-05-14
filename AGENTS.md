@@ -59,6 +59,17 @@ product goal.
 
 - V1 does not patch WAL files. Refresh is near-real-time after WeChat writes or
   checkpoints the main DB.
+- In V1, the daemon is a cache maintenance service, not a contacts query
+  service. It should focus on key/cache setup, refresh, source DB watching,
+  `health`, and `refresh_contacts`.
+- `weview contacts ...` should always read contacts directly from the local
+  decrypted cache, then apply filtering, sorting, pagination, counts, and output
+  formatting in the CLI path.
+- If `contacts --refresh` is used and the daemon is running, the CLI may ask the
+  daemon to refresh first, then still read the cache directly. If the daemon is
+  not running, the CLI may refresh the cache in-process.
+- Do not reintroduce daemon-side `list_contacts` unless the product direction
+  explicitly changes to a real query service, Web API, or MCP service.
 - The daemon uses the internal Unix socket `~/.weview/weview.sock`. Treat this as
   internal transport, not a public Web API.
 - Decrypted contact cache path is:

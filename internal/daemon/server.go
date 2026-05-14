@@ -12,16 +12,14 @@ import (
 	"time"
 
 	"weview/internal/app"
-	"weview/internal/contacts"
 	"weview/internal/key"
 )
 
 type Server struct {
 	SocketPath string
 
-	mu        sync.Mutex
-	cachePath string
-	target    key.TargetDB
+	mu     sync.Mutex
+	target key.TargetDB
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -85,20 +83,12 @@ func (s *Server) prepareSocket(ctx context.Context) error {
 func (s *Server) refresh(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, cachePath, err := key.EnsureContactCache(ctx)
+	res, _, err := key.EnsureContactCache(ctx)
 	if err != nil {
 		return err
 	}
-	s.cachePath = cachePath
 	s.target = res.Target
 	return nil
-}
-
-func (s *Server) list(ctx context.Context) ([]contacts.Contact, error) {
-	s.mu.Lock()
-	cachePath := s.cachePath
-	s.mu.Unlock()
-	return contacts.NewService(cachePath).List(ctx)
 }
 
 func (s *Server) watchContacts(ctx context.Context) {
@@ -133,13 +123,6 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
-	case ActionListContacts:
-		list, err := s.list(ctx)
-		if err != nil {
-			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
-			return
-		}
-		_ = json.NewEncoder(conn).Encode(Response{OK: true, Contacts: list})
 	default:
 		_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: "unknown daemon action: " + req.Action})
 	}
