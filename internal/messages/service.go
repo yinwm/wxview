@@ -23,6 +23,11 @@ import (
 type Message struct {
 	ID              string            `json:"id"`
 	ChatUsername    string            `json:"chat_username"`
+	ChatKind        string            `json:"chat_kind"`
+	ChatDisplayName string            `json:"chat_display_name"`
+	ChatAlias       string            `json:"chat_alias"`
+	ChatRemark      string            `json:"chat_remark"`
+	ChatNickName    string            `json:"chat_nick_name"`
 	FromUsername    string            `json:"from_username"`
 	Direction       string            `json:"direction"`
 	IsSelf          bool              `json:"is_self"`
@@ -45,6 +50,17 @@ type Message struct {
 	SourceDB     string `json:"-"`
 	TableName    string `json:"-"`
 	RawContent   string `json:"-"`
+}
+
+const ChatKindUnknown = "unknown"
+
+type ChatInfo struct {
+	Username    string
+	Kind        string
+	DisplayName string
+	Alias       string
+	Remark      string
+	NickName    string
 }
 
 type MessageSource struct {
@@ -236,6 +252,8 @@ func normalizeRow(username string, tableName string, sourceDB string, includeSou
 	msg := Message{
 		ID:              stableID(sourceDB, tableName, row.LocalID),
 		ChatUsername:    username,
+		ChatKind:        ChatKindUnknown,
+		ChatDisplayName: username,
 		FromUsername:    fromUsername,
 		Direction:       direction,
 		IsSelf:          isSelf,
@@ -270,11 +288,60 @@ func normalizeRow(username string, tableName string, sourceDB string, includeSou
 	return msg
 }
 
-func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
-	if msg == nil || mediaResolver == nil || msg.Type != messageTypeImage {
+func ApplyChatInfo(list []Message, chatInfo map[string]ChatInfo) {
+	for i := range list {
+		ApplyChatInfoToMessage(&list[i], chatInfo[list[i].ChatUsername])
+	}
+}
+
+func ApplyChatInfoToMessage(msg *Message, info ChatInfo) {
+	if msg == nil {
 		return
 	}
-	mediaInfo := mediaResolver.ResolveImage(msg.ChatUsername, msg.LocalID, msg.CreateTime, msg.RawType, msg.RawContent, msg.IsChatroom)
+	if strings.TrimSpace(info.Username) == "" {
+		if strings.TrimSpace(msg.ChatKind) == "" {
+			msg.ChatKind = ChatKindUnknown
+		}
+		if strings.TrimSpace(msg.ChatDisplayName) == "" {
+			msg.ChatDisplayName = msg.ChatUsername
+		}
+		return
+	}
+	msg.ChatKind = defaultString(info.Kind, ChatKindUnknown)
+	msg.ChatDisplayName = defaultString(info.DisplayName, msg.ChatUsername)
+	msg.ChatAlias = info.Alias
+	msg.ChatRemark = info.Remark
+	msg.ChatNickName = info.NickName
+}
+
+func EnrichMediaDetails(list []Message, mediaResolver *media.Resolver) {
+	if mediaResolver == nil {
+		return
+	}
+	for i := range list {
+		enrichMediaDetail(&list[i], mediaResolver)
+	}
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
+	if msg == nil || mediaResolver == nil {
+		return
+	}
+	kind := mediaKindForMessageType(msg.Type)
+	if kind == "" {
+		return
+	}
+	mediaInfo := mediaResolver.Resolve(kind, msg.ChatUsername, msg.LocalID, msg.CreateTime, msg.RawType, msg.RawContent, msg.IsChatroom)
+	if mediaInfo.Status == "" {
+		return
+	}
 	if msg.ContentDetail == nil {
 		msg.ContentDetail = map[string]string{}
 	}
@@ -287,6 +354,15 @@ func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
 	if mediaInfo.SourcePath != "" {
 		msg.ContentDetail["source_path"] = mediaInfo.SourcePath
 	}
+	if mediaInfo.ThumbnailPath != "" {
+		msg.ContentDetail["thumbnail_path"] = mediaInfo.ThumbnailPath
+	}
+	if mediaInfo.ThumbnailSourcePath != "" {
+		msg.ContentDetail["thumbnail_source_path"] = mediaInfo.ThumbnailSourcePath
+	}
+	if mediaInfo.ThumbnailDecoded {
+		msg.ContentDetail["thumbnail_decoded"] = fmt.Sprintf("%t", mediaInfo.ThumbnailDecoded)
+	}
 	if mediaInfo.Width > 0 {
 		msg.ContentDetail["width"] = fmt.Sprintf("%d", mediaInfo.Width)
 	}
@@ -295,6 +371,17 @@ func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
 	}
 	if mediaInfo.Reason != "" {
 		msg.ContentDetail["media_reason"] = mediaInfo.Reason
+	}
+}
+
+func mediaKindForMessageType(msgType int64) string {
+	switch msgType {
+	case messageTypeImage:
+		return "image"
+	case messageTypeVideo:
+		return "video"
+	default:
+		return ""
 	}
 }
 

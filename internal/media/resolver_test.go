@@ -3,10 +3,12 @@ package media
 import (
 	"bytes"
 	"crypto/aes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -141,6 +143,82 @@ func TestResolverAddsDirectImagePath(t *testing.T) {
 	}
 }
 
+func TestResolverAddsDirectVideoPathAndThumbnail(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "wxid_owner_bcc2", "db_storage")
+	chat := "alice"
+	videoDir := filepath.Join(dir, "wxid_owner_bcc2", "Message", "MessageTemp", md5Hex(chat), "Video")
+	if err := os.MkdirAll(videoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(videoDir, "71700000000.mp4")
+	writeTestMP4(t, videoPath)
+	thumbPath := filepath.Join(videoDir, "71700000000_thumb.jpg")
+	writeTestPNG(t, thumbPath, 4, 5)
+
+	content := `<msg><videomsg md5="abc123def456" length="12" playlength="3" cdnthumbwidth="4" cdnthumbheight="5" /></msg>`
+	resolver := NewResolver(dataDir, filepath.Join(dir, "cache"))
+	info := resolver.ResolveVideo(chat, 7, 1700000000, 43, content, false)
+	if info.Status != "resolved" || info.Path != videoPath || info.Decoded {
+		t.Fatalf("unexpected video info: %+v", info)
+	}
+	if !info.Thumbnail || info.ThumbnailPath != thumbPath || info.Width != 4 || info.Height != 5 {
+		t.Fatalf("unexpected video thumbnail: %+v", info)
+	}
+}
+
+func TestResolverFindsVideoFromResourceDB(t *testing.T) {
+	dir := t.TempDir()
+	accountBase := filepath.Join(dir, "wxid_owner_bcc2")
+	dataDir := filepath.Join(accountBase, "db_storage")
+	videoDir := filepath.Join(accountBase, "msg", "video", "room-hash")
+	if err := os.MkdirAll(videoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(videoDir, "abc123def456.mp4")
+	writeTestMP4(t, videoPath)
+	resourceDB := filepath.Join(dir, "message_resource.db")
+	sql := `
+CREATE TABLE dir2id(username TEXT);
+CREATE TABLE video_hardlink_info_v4(md5 TEXT, file_name TEXT, file_size INTEGER, modify_time INTEGER, dir1 INTEGER, dir2 INTEGER);
+INSERT INTO dir2id(rowid, username) VALUES (1, 'room-hash');
+INSERT INTO video_hardlink_info_v4(md5, file_name, file_size, modify_time, dir1, dir2) VALUES ('abc123def456', 'abc123def456.mp4', 12, 1700000000, 1, 0);
+`
+	if out, err := exec.Command("sqlite3", resourceDB, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create resource db: %v: %s", err, out)
+	}
+
+	content := `<msg><videomsg md5="abc123def456" length="12" /></msg>`
+	resolver := NewResolver(dataDir, filepath.Join(dir, "cache"), resourceDB)
+	info := resolver.ResolveVideo("alice", 7, 1700000000, 43, content, false)
+	if info.Status != "resolved" || info.Path != videoPath {
+		t.Fatalf("unexpected video info: %+v, want path %s", info, videoPath)
+	}
+}
+
+func TestDecryptXORDatVideo(t *testing.T) {
+	dir := t.TempDir()
+	raw := testMP4Bytes()
+	path := filepath.Join(dir, "a.dat")
+	if err := os.WriteFile(path, xorBytes(raw, 0x33), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, ext, _, err := decryptVideoBytes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, raw) || ext != "mp4" {
+		t.Fatalf("decoded=%x ext=%s", decoded, ext)
+	}
+}
+
 func writeI32LEForTest(data []byte, offset int, value int) {
 	data[offset] = byte(value)
 	data[offset+1] = byte(value >> 8)
@@ -164,4 +242,16 @@ func writeTestPNG(t *testing.T, path string, width int, height int) {
 	if err := png.Encode(file, img); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeTestMP4(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, testMP4Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testMP4Bytes() []byte {
+	data := []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	return append(data, []byte(fmt.Sprintf("%012d", 1))...)
 }

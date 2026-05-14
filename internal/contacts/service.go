@@ -193,8 +193,8 @@ func sortContacts(list []Contact, sortBy string) {
 		})
 	case "name":
 		sort.SliceStable(list, func(i, j int) bool {
-			left := strings.ToLower(displayName(list[i]))
-			right := strings.ToLower(displayName(list[j]))
+			left := strings.ToLower(DisplayName(list[i]))
+			right := strings.ToLower(DisplayName(list[j]))
 			if left == right {
 				return strings.ToLower(list[i].Username) < strings.ToLower(list[j].Username)
 			}
@@ -203,7 +203,7 @@ func sortContacts(list []Contact, sortBy string) {
 	}
 }
 
-func displayName(contact Contact) string {
+func DisplayName(contact Contact) string {
 	if strings.TrimSpace(contact.Remark) != "" {
 		return contact.Remark
 	}

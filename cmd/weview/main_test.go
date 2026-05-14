@@ -113,6 +113,58 @@ func TestWriteMessagesJSONL(t *testing.T) {
 	}
 }
 
+func TestWriteMessageEnvelopeJSON(t *testing.T) {
+	list := []messages.Message{{
+		ID:              "wechat:msg:message_0.db:Msg_x:1",
+		ChatUsername:    "alice",
+		ChatKind:        messages.ChatKindUnknown,
+		ChatDisplayName: "alice",
+		FromUsername:    "self",
+		Direction:       "out",
+		IsSelf:          true,
+		Seq:             1001,
+		CreateTime:      1700000000,
+		Time:            "2023-11-14 22:13:20",
+		Type:            1,
+		Content:         "hello <tag> & link",
+		ContentDetail:   map[string]string{"type": "text", "text": "hello <tag> & link"},
+		ContentEncoding: "text",
+	}}
+	var out bytes.Buffer
+	meta := messagesMeta{
+		SchemaVersion: messageEnvelopeSchemaVersion,
+		Timezone:      "Asia/Shanghai",
+		Mode:          "messages",
+		Username:      "alice",
+		Limit:         1,
+		Returned:      1,
+		HasMore:       false,
+	}
+	if err := writeMessageEnvelope(&out, meta, list); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), `\u003c`) || strings.Contains(out.String(), `\u0026`) {
+		t.Fatalf("message envelope should not HTML-escape content: %s", out.String())
+	}
+	var got struct {
+		Meta  messagesMeta       `json:"meta"`
+		Items []messages.Message `json:"items"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Meta.SchemaVersion != 1 || got.Meta.Timezone != "Asia/Shanghai" || got.Meta.Mode != "messages" || len(got.Items) != 1 || got.Items[0].Content != "hello <tag> & link" {
+		t.Fatalf("unexpected envelope: %+v", got)
+	}
+}
+
+func TestLocalTimezoneNamePrefersTZ(t *testing.T) {
+	t.Setenv("TZ", "Asia/Shanghai")
+	if got := localTimezoneName(); got != "Asia/Shanghai" {
+		t.Fatalf("timezone = %q, want Asia/Shanghai", got)
+	}
+}
+
 func TestWriteMessagesCSV(t *testing.T) {
 	list := []messages.Message{{
 		ID:              "wechat:msg:message_0.db:Msg_x:1",
@@ -144,10 +196,10 @@ func TestWriteMessagesCSV(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d csv rows, want 2: %q", len(rows), out.String())
 	}
-	if rows[0][0] != "id" || rows[0][12] != "content" || rows[0][13] != "content_detail" || rows[0][15] != "source_db" {
+	if rows[0][0] != "id" || rows[0][17] != "content" || rows[0][18] != "content_detail" || rows[0][20] != "source_db" {
 		t.Fatalf("unexpected message csv header: %#v", rows[0])
 	}
-	if rows[1][12] != "hello, \"quoted\"\nline" || rows[1][13] != "hello, \"quoted\"\nline" || rows[1][15] != "message_0.db" {
+	if rows[1][17] != "hello, \"quoted\"\nline" || rows[1][18] != "hello, \"quoted\"\nline" || rows[1][20] != "message_0.db" {
 		t.Fatalf("message content was not round-tripped correctly: %#v", rows[1])
 	}
 }
@@ -196,5 +248,25 @@ func TestParseTimeBoundDateEndIncludesFullDay(t *testing.T) {
 	}
 	if end-start != 24*60*60-1 {
 		t.Fatalf("date-only end should include full day; start=%d end=%d", start, end)
+	}
+}
+
+func TestParseMessageRangeDate(t *testing.T) {
+	start, end, hasStart, hasEnd, err := parseMessageRange("2026-05-14", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasStart || !hasEnd {
+		t.Fatal("expected date to provide both bounds")
+	}
+	if end-start != 24*60*60-1 {
+		t.Fatalf("date should expand to one full day; start=%d end=%d", start, end)
+	}
+}
+
+func TestParseMessageRangeRejectsDateWithExplicitBounds(t *testing.T) {
+	_, _, _, _, err := parseMessageRange("today", "2026-05-14", "")
+	if err == nil || !strings.Contains(err.Error(), "--date cannot be combined") {
+		t.Fatalf("expected date/start conflict error, got %v", err)
 	}
 }

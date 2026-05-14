@@ -20,6 +20,7 @@ func TestRootHelpIsDescriptive(t *testing.T) {
 		"weview init",
 		"weview contacts --help",
 		"weview messages --help",
+		"weview timeline --help",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("root help missing %q:\n%s", want, text)
@@ -105,12 +106,17 @@ func TestMessagesHelpIsActionable(t *testing.T) {
 	for _, want := range []string{
 		"weview messages - List WeChat messages",
 		"--username TEXT",
+		"JSON envelope with meta and items",
 		"--start TIME",
 		"--end TIME",
+		"--date today|yesterday|YYYY-MM-DD",
 		"--after-seq N",
 		"--limit N",
 		"--offset N",
 		"--source",
+		"meta.schema_version",
+		"meta.timezone",
+		"meta.next_args",
 		"create_time ascending",
 		"message/message_*.db",
 	} {
@@ -133,6 +139,46 @@ func TestMessagesWithoutArgsShowsHelp(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("messages no-arg help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestTimelineHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"timeline", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview timeline - List WeChat messages",
+		"--kind all",
+		"--query TEXT",
+		"--username TEXT",
+		"--date today|yesterday|YYYY-MM-DD",
+		"--cursor TOKEN",
+		"meta.schema_version",
+		"meta.timezone",
+		"meta.next_args",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("timeline help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestTimelineWithoutArgsShowsHelp(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"timeline"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview timeline - List WeChat messages",
+		"Conversation selection:",
+		"--date today|yesterday|YYYY-MM-DD",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("timeline no-arg help missing %q:\n%s", want, text)
 		}
 	}
 }

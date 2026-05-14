@@ -64,6 +64,7 @@ type mediaMsg struct {
 	XMLName  xml.Name    `xml:"msg"`
 	App      appMsg      `xml:"appmsg"`
 	Image    imageMsg    `xml:"img"`
+	Video    videoMsg    `xml:"videomsg"`
 	Location locationMsg `xml:"location"`
 	Emoji    emojiMsg    `xml:"emoji"`
 }
@@ -101,6 +102,28 @@ type imageMsg struct {
 	MD5            string `xml:"md5,attr"`
 	HEVCMidSize    string `xml:"hevc_mid_size,attr"`
 	OriginMD5      string `xml:"originsourcemd5,attr"`
+}
+
+type videoMsg struct {
+	AESKey            string `xml:"aeskey,attr"`
+	CDNVideoURL       string `xml:"cdnvideourl,attr"`
+	CDNThumbAESKey    string `xml:"cdnthumbaeskey,attr"`
+	CDNThumbURL       string `xml:"cdnthumburl,attr"`
+	Length            string `xml:"length,attr"`
+	PlayLength        string `xml:"playlength,attr"`
+	CDNThumbLength    string `xml:"cdnthumblength,attr"`
+	CDNThumbWidth     string `xml:"cdnthumbwidth,attr"`
+	CDNThumbHeight    string `xml:"cdnthumbheight,attr"`
+	FromUsername      string `xml:"fromusername,attr"`
+	MD5               string `xml:"md5,attr"`
+	NewMD5            string `xml:"newmd5,attr"`
+	RawMD5            string `xml:"rawmd5,attr"`
+	RawLength         string `xml:"rawlength,attr"`
+	CDNRawVideoURL    string `xml:"cdnrawvideourl,attr"`
+	CDNRawVideoAESKey string `xml:"cdnrawvideoaeskey,attr"`
+	OriginSourceMD5   string `xml:"originsourcemd5,attr"`
+	IsPlaceholder     string `xml:"isplaceholder,attr"`
+	IsAd              string `xml:"isad,attr"`
 }
 
 type finderFeed struct {
@@ -149,7 +172,7 @@ func normalizeContent(msgType int64, subType int64, raw string) normalizedConten
 	case messageTypeCard:
 		return normalizedContent{Type: "card", Text: "[名片]"}
 	case messageTypeVideo:
-		return normalizedContent{Type: "video", Text: "[视频]"}
+		return normalizeVideo(raw)
 	case messageTypeAnimation:
 		if msg, ok := parseMedia(raw); ok && msg.Emoji.CdnURL != "" {
 			return normalizedContent{Type: "emoji", Text: "[动画表情]", Details: map[string]string{"url": msg.Emoji.CdnURL}}
@@ -189,6 +212,32 @@ func normalizeImage(raw string) normalizedContent {
 	putIfNonZero(details, "cdn_hd_height", img.CDNHDHeight)
 	putIfNonZero(details, "hevc_mid_size", img.HEVCMidSize)
 	return normalizedContent{Type: "image", Text: "[图片]", Details: detailsOrNil(details)}
+}
+
+func normalizeVideo(raw string) normalizedContent {
+	msg, ok := parseMedia(raw)
+	if !ok {
+		return normalizedContent{Type: "video", Text: "[视频]"}
+	}
+	video := msg.Video
+	details := map[string]string{}
+	putIfNotEmpty(details, "md5", video.MD5)
+	putIfNotEmpty(details, "new_md5", video.NewMD5)
+	putIfNotEmpty(details, "raw_md5", video.RawMD5)
+	putIfNotEmpty(details, "origin_source_md5", video.OriginSourceMD5)
+	putIfNonZero(details, "length", video.Length)
+	putIfNonZero(details, "raw_length", video.RawLength)
+	putIfNonZero(details, "play_length", video.PlayLength)
+	putIfNotEmpty(details, "from_username", video.FromUsername)
+	putIfNotEmpty(details, "cdn_video_url", video.CDNVideoURL)
+	putIfNotEmpty(details, "cdn_raw_video_url", video.CDNRawVideoURL)
+	putIfNotEmpty(details, "cdn_thumb_url", video.CDNThumbURL)
+	putIfNonZero(details, "cdn_thumb_length", video.CDNThumbLength)
+	putIfNonZero(details, "cdn_thumb_width", video.CDNThumbWidth)
+	putIfNonZero(details, "cdn_thumb_height", video.CDNThumbHeight)
+	putIfNonZero(details, "is_placeholder", video.IsPlaceholder)
+	putIfNonZero(details, "is_ad", video.IsAd)
+	return normalizedContent{Type: "video", Text: "[视频]", Details: detailsOrNil(details)}
 }
 
 func normalizeLocation(raw string) normalizedContent {

@@ -5,7 +5,9 @@ The V1 implementation is intentionally narrow: initialize supported DB keys,
 decrypt `contact/contact.db` and message-related DBs, run a local daemon for
 cache maintenance, list contacts/groups from the decrypted contact cache, and
 query history for an explicit username from decrypted `message/message_[number].db`
-caches. Image messages should resolve usable local image paths automatically.
+caches. It also supports a bounded cross-conversation `timeline` query for AI
+and script consumers. Image and video messages should resolve usable local
+media paths automatically.
 
 ## Collaboration Rules
 
@@ -43,21 +45,72 @@ caches. Image messages should resolve usable local image paths automatically.
   `--offset` do not affect the count.
 - `weview messages` requires `--username`; without args it must show the same
   help as `weview messages --help`. It supports `--format table|json|jsonl|csv`,
-  `--start`, `--end`, `--limit`, `--offset`, and `--refresh`.
+  `--date`, `--start`, `--end`, `--after-seq`, `--limit`, `--offset`,
+  `--source`, and `--refresh`.
+- `weview messages --format json` returns a `{meta, items}` envelope. `meta`
+  includes `schema_version` and `timezone`. Reliable machine pagination should
+  follow `meta.next_args` / `meta.next_after_seq`; `--offset` is mainly for
+  temporary human reads. `jsonl`, `csv`, and `table` remain item-only outputs.
 - Treat the `--username` value as an ordinary chat target even when it matches
   the current account username. Do not add a special self-chat guard or require
   an extra override flag for that case.
 - `weview messages` returns records sorted by time ascending by default. Apply
   `--limit` and `--offset` after merging all matching message shards.
+- V1 does not maintain a message index. Large chats or broad time ranges can be
+  slow because message shards are merged before pagination.
 - `--start` and `--end` are inclusive. Date-only `--end` includes the full day.
+- `messages --date today|yesterday|YYYY-MM-DD` selects one local calendar day
+  and is mutually exclusive with `--start`/`--end`.
+- `--after-seq` is a cursor-style filter. It returns only rows whose `seq` is
+  greater than the provided value, then global sorting and pagination still
+  apply.
+- `--source` is a debugging flag only. It may expose source DB/table/local row
+  metadata for cache/shard diagnosis, but normal chat-history reads should not
+  require it.
+- `weview timeline` selects one or more conversations and returns a bounded
+  cross-conversation time range. It supports `--format table|json|jsonl|csv`,
+  `--kind all|friend|chatroom|other`, `--query`, `--username`, `--date`,
+  `--start`, `--end`, `--limit`, `--cursor`, `--source`, and `--refresh`.
+- V1 must not imply `timeline` is indexed. It fans out across selected
+  conversations and message shards, merges results in-process, then applies the
+  global limit. Broad selectors or wide date ranges can be very slow; prefer
+  narrow selectors and small time windows in examples and AI/tool usage.
+- `weview timeline` must have an explicit time range: either `--date
+  today|yesterday|YYYY-MM-DD` or both `--start` and `--end`. `--date` is
+  mutually exclusive with `--start`/`--end`.
+- `weview timeline` must have an explicit conversation selector: either
+  `--username`, or `--kind`/`--query`. `--username` cannot be combined with
+  `--kind` or `--query`.
+- `timeline --query` filters conversation metadata (`username`, `alias`,
+  `remark`, `nick_name`); it does not search message content.
+- `weview timeline --format json` returns a `{meta, items}` envelope with
+  `meta.schema_version`, `meta.timezone`, `meta.next_cursor`, and
+  `meta.next_args`. Reliable pagination consumers should follow
+  `meta.next_args`; `jsonl`, `csv`, and `table` remain item-only outputs.
+- `timeline` `matched_chats` is the number of conversations selected by the
+  filter, not the number of conversations that have returned messages on the
+  current page or within the requested time range.
+- Future performance work should be documented as optional TODOs unless the
+  product direction explicitly changes. Likely directions are SQL pagination
+  pushdown for `messages`, `timeline --explain` / dry-run estimation, batched
+  timeline fan-out with stable cursor semantics, and an optional local message
+  index. A future FTS5 index should be treated mainly as a `search` accelerator;
+  `messages` and `timeline` need ordinary chat/time indexes to become fast.
+- Message `items` from `messages` and `timeline` must share the same schema.
+  Include chat metadata fields `chat_kind`, `chat_display_name`, `chat_alias`,
+  `chat_remark`, and `chat_nick_name`. `chat_display_name` is `remark >
+  nick_name > alias > username`; missing contacts fall back to `chat_username`
+  and `chat_kind=unknown`.
 - `content` must remain the raw decoded message body. Use `content_detail` for
-  convenience parsing. For image messages, parse useful XML metadata such as
-  md5, length, thumbnail dimensions, and CDN file identifiers there.
-- `weview messages` resolves image usability automatically for returned rows.
-  It should resolve local image files from WeChat storage and decode `.dat`
-  images into `~/.weview/cache/<account>/media/`. Put the result in
-  `content_detail`, not a separate top-level `media` object: include
-  `media_status`, `path`, `source_path`, `decoded`, `thumbnail`, `width`,
+  convenience parsing. For image and video messages, parse useful XML metadata
+  such as md5, length/play length, thumbnail dimensions, and CDN file
+  identifiers there. Do not copy CDN AES keys into `content_detail`.
+- `weview messages` resolves image and video usability automatically for
+  returned rows. It should resolve local media files from WeChat storage and
+  decode supported `.dat` media into `~/.weview/cache/<account>/media/`.
+  Put the result in `content_detail`, not a separate top-level `media` object:
+  include `media_status`, `path`, `source_path`, `decoded`, `thumbnail`,
+  `thumbnail_path`, `thumbnail_source_path`, `thumbnail_decoded`, `width`,
   `height`, and `media_reason` when available.
 - `weview messages` must not scan WeChat process memory. If a message key is
   missing or invalid, tell the user to run `sudo weview init`.
@@ -105,6 +158,11 @@ product goal.
   it may ask the daemon to refresh message caches first; otherwise it may
   refresh message caches in-process. Do not route message queries through the
   daemon in V1.
+- `weview timeline ...` should select conversations from the local decrypted
+  contact cache and read messages directly from local decrypted message caches.
+  If `--refresh` is used, refresh both contact and message caches, preferring
+  daemon refresh actions when available. Do not route timeline queries through
+  the daemon in V1.
 - Do not reintroduce daemon-side `list_contacts` unless the product direction
   explicitly changes to a real query service, Web API, or MCP service.
 - The daemon uses the internal Unix socket `~/.weview/weview.sock`. Treat this as
@@ -165,4 +223,6 @@ go run ./cmd/weview contacts
 go run ./cmd/weview contacts --help
 go run ./cmd/weview messages
 go run ./cmd/weview messages --help
+go run ./cmd/weview timeline
+go run ./cmd/weview timeline --help
 ```

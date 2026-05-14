@@ -62,6 +62,31 @@ func TestListMergesShardsSortsAscendingAndPaginates(t *testing.T) {
 	}
 }
 
+func TestApplyChatInfoFillsMetadata(t *testing.T) {
+	list := []Message{{ChatUsername: "room@chatroom"}}
+	ApplyChatInfo(list, map[string]ChatInfo{
+		"room@chatroom": {
+			Username:    "room@chatroom",
+			Kind:        "chatroom",
+			DisplayName: "AI Room",
+			Alias:       "room-alias",
+			Remark:      "AI Room",
+			NickName:    "Original Room",
+		},
+	})
+	if list[0].ChatKind != "chatroom" || list[0].ChatDisplayName != "AI Room" || list[0].ChatAlias != "room-alias" || list[0].ChatRemark != "AI Room" || list[0].ChatNickName != "Original Room" {
+		t.Fatalf("chat metadata not applied: %+v", list[0])
+	}
+}
+
+func TestApplyChatInfoFallbackForMissingContact(t *testing.T) {
+	list := []Message{{ChatUsername: "alice"}}
+	ApplyChatInfo(list, nil)
+	if list[0].ChatKind != ChatKindUnknown || list[0].ChatDisplayName != "alice" {
+		t.Fatalf("missing contact fallback = %+v", list[0])
+	}
+}
+
 func TestListParsesChatroomSenderPrefix(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "message_0.db")
@@ -154,6 +179,52 @@ func TestListAddsImagePathWithoutChangingImageText(t *testing.T) {
 	}
 	if detail["path"] != imagePath || detail["width"] != "2" || detail["height"] != "3" || detail["media_status"] != "resolved" {
 		t.Fatalf("unexpected resolved image detail: %+v", detail)
+	}
+}
+
+func TestListAddsVideoPathAndParsesVideoMetadata(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	chat := "alice"
+	table := TableName(chat)
+	dataDir := filepath.Join(dir, "wxid_owner_bcc2", "db_storage")
+	videoDir := filepath.Join(dir, "wxid_owner_bcc2", "Message", "MessageTemp", md5HexForTest(chat), "Video")
+	if err := os.MkdirAll(videoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(videoDir, "71700000000.mp4")
+	writeMP4ForTest(t, videoPath)
+	thumbPath := filepath.Join(videoDir, "71700000000_thumb.jpg")
+	writePNGForTest(t, thumbPath, 4, 5)
+
+	content := `<msg><videomsg aeskey="secret-aes-key" cdnvideourl="video-file-id" cdnthumburl="thumb-file-id" length="5007511" playlength="43" cdnthumblength="3762" cdnthumbwidth="288" cdnthumbheight="162" fromusername="wxid_sender" md5="f4c5335335d0a326df203b9bb51aa503" newmd5="de3fa0a024bbb1cb9fc6e2b65843a063" originsourcemd5="735f7ff8967a783bc7b85178490852ff" /></msg>`
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 7, SortSeq: 1001, CreateTime: 1700000000, LocalType: 43, Status: 4, Content: content},
+	})
+	resolver := media.NewResolver(dataDir, filepath.Join(dir, "cache"))
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: chat, MediaResolver: &resolver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	detail := got[0].ContentDetail
+	if detail["type"] != "video" || detail["text"] != "[视频]" {
+		t.Fatalf("unexpected video detail identity: %+v", detail)
+	}
+	if detail["md5"] != "f4c5335335d0a326df203b9bb51aa503" || detail["new_md5"] != "de3fa0a024bbb1cb9fc6e2b65843a063" || detail["play_length"] != "43" || detail["cdn_thumb_width"] != "288" {
+		t.Fatalf("missing video metadata: %+v", detail)
+	}
+	if detail["aes_key"] != "" || detail["cdn_thumb_aes_key"] != "" {
+		t.Fatalf("secret video keys should not be copied into content_detail: %+v", detail)
+	}
+	if detail["path"] != videoPath || detail["thumbnail_path"] != thumbPath || detail["media_status"] != "resolved" || detail["thumbnail"] != "true" {
+		t.Fatalf("unexpected resolved video detail: %+v", detail)
 	}
 }
 
@@ -432,6 +503,14 @@ func writePNGForTest(t *testing.T, path string, width int, height int) {
 	}
 	defer file.Close()
 	if err := png.Encode(file, img); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeMP4ForTest(t *testing.T, path string) {
+	t.Helper()
+	data := []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0x00, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

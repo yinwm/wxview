@@ -37,21 +37,25 @@ var (
 )
 
 type Info struct {
-	Kind       string `json:"kind"`
-	Status     string `json:"status"`
-	Path       string `json:"path,omitempty"`
-	SourcePath string `json:"source_path,omitempty"`
-	Decoded    bool   `json:"decoded"`
-	Thumbnail  bool   `json:"thumbnail"`
-	Width      int    `json:"width,omitempty"`
-	Height     int    `json:"height,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Kind                string `json:"kind"`
+	Status              string `json:"status"`
+	Path                string `json:"path,omitempty"`
+	SourcePath          string `json:"source_path,omitempty"`
+	Decoded             bool   `json:"decoded"`
+	Thumbnail           bool   `json:"thumbnail"`
+	ThumbnailPath       string `json:"thumbnail_path,omitempty"`
+	ThumbnailSourcePath string `json:"thumbnail_source_path,omitempty"`
+	ThumbnailDecoded    bool   `json:"thumbnail_decoded,omitempty"`
+	Width               int    `json:"width,omitempty"`
+	Height              int    `json:"height,omitempty"`
+	Reason              string `json:"reason,omitempty"`
 }
 
 type Resolver struct {
-	DataDir  string
-	CacheDir string
-	keys     imageKeyMaterial
+	DataDir     string
+	CacheDir    string
+	ResourceDBs []string
+	keys        imageKeyMaterial
 }
 
 type imageKeyMaterial struct {
@@ -70,41 +74,53 @@ type imageSizeHints struct {
 	thumb uint64
 }
 
-func NewResolver(dataDir string, cacheDir string) Resolver {
+func NewResolver(dataDir string, cacheDir string, resourceDBs ...string) Resolver {
 	return Resolver{
-		DataDir:  dataDir,
-		CacheDir: cacheDir,
-		keys:     scanImageKeyMaterial(dataDir),
+		DataDir:     dataDir,
+		CacheDir:    cacheDir,
+		ResourceDBs: unique(resourceDBs),
+		keys:        scanImageKeyMaterial(dataDir),
+	}
+}
+
+func (r Resolver) Resolve(kind string, chatUsername string, localID int64, createTime int64, rawType int64, content string, isChatroom bool) Info {
+	switch kind {
+	case "image":
+		return r.ResolveImage(chatUsername, localID, createTime, rawType, content, isChatroom)
+	case "video":
+		return r.ResolveVideo(chatUsername, localID, createTime, rawType, content, isChatroom)
+	default:
+		return Info{}
 	}
 }
 
 func (r Resolver) ResolveImage(chatUsername string, localID int64, createTime int64, rawType int64, content string, isChatroom bool) Info {
 	if int64(uint64(rawType)&0xffffffff) != 3 {
-		return notFound("not an image message")
+		return notFound("image", "not an image message")
 	}
 	body := messageBody(content, isChatroom)
 	found, ok := resolveImagePath(r.DataDir, body, createTime, chatUsername, localID)
 	if !ok {
-		return notFound("local image file not found")
+		return notFound("image", "local image file not found")
 	}
 	if _, err := os.Stat(found.path); err != nil {
-		return notFound("local image file not found")
+		return notFound("image", "local image file not found")
 	}
 	if !strings.HasSuffix(strings.ToLower(found.path), ".dat") {
-		return withImageDimensions(resolved(found.path, found.path, false, found.thumbnail))
+		return withImageDimensions(resolved("image", found.path, found.path, false, found.thumbnail))
 	}
 	out, err := r.decryptImageToCache(found.path)
 	if err == nil {
-		return withImageDimensions(resolved(out, found.path, true, found.thumbnail))
+		return withImageDimensions(resolved("image", out, found.path, true, found.thumbnail))
 	}
 	if !found.thumbnail {
 		if thumb, ok := thumbnailVariant(found.path); ok && thumb != found.path {
 			if out, thumbErr := r.decryptImageToCache(thumb); thumbErr == nil {
-				return withImageDimensions(resolved(out, thumb, true, true))
+				return withImageDimensions(resolved("image", out, thumb, true, true))
 			}
 		}
 	}
-	return decryptFailed(found.path, err.Error(), found.thumbnail)
+	return decryptFailed("image", found.path, err.Error(), found.thumbnail)
 }
 
 func (i Info) Summary(localID int64) string {
@@ -127,8 +143,8 @@ func (i Info) Summary(localID int64) string {
 	}
 }
 
-func resolved(path string, sourcePath string, decoded bool, thumbnail bool) Info {
-	return Info{Kind: "image", Status: "resolved", Path: path, SourcePath: sourcePath, Decoded: decoded, Thumbnail: thumbnail}
+func resolved(kind string, path string, sourcePath string, decoded bool, thumbnail bool) Info {
+	return Info{Kind: kind, Status: "resolved", Path: path, SourcePath: sourcePath, Decoded: decoded, Thumbnail: thumbnail}
 }
 
 func withImageDimensions(info Info) Info {
@@ -153,12 +169,12 @@ func imageDimensions(path string) (int, int, bool) {
 	return cfg.Width, cfg.Height, true
 }
 
-func notFound(reason string) Info {
-	return Info{Kind: "image", Status: "not_found", Decoded: false, Thumbnail: false, Reason: reason}
+func notFound(kind string, reason string) Info {
+	return Info{Kind: kind, Status: "not_found", Decoded: false, Thumbnail: false, Reason: reason}
 }
 
-func decryptFailed(sourcePath string, reason string, thumbnail bool) Info {
-	return Info{Kind: "image", Status: "decrypt_failed", SourcePath: sourcePath, Decoded: false, Thumbnail: thumbnail, Reason: reason}
+func decryptFailed(kind string, sourcePath string, reason string, thumbnail bool) Info {
+	return Info{Kind: kind, Status: "decrypt_failed", SourcePath: sourcePath, Decoded: false, Thumbnail: thumbnail, Reason: reason}
 }
 
 func MediaCacheDir(account string) (string, error) {
@@ -290,6 +306,10 @@ func (r Resolver) decryptImageToCache(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return r.writeDecodedToCache(path, bytes, ext, cacheKey)
+}
+
+func (r Resolver) writeDecodedToCache(path string, bytes []byte, ext string, cacheKey string) (string, error) {
 	if err := os.MkdirAll(r.CacheDir, 0o700); err != nil {
 		return "", err
 	}
