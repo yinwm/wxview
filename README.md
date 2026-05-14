@@ -1,69 +1,158 @@
 # Weview
 
-Weview is a local-first CLI for reading macOS WeChat data from the user's own machine.
+Weview 是一个把本机微信数据变成可访问数据源的工具。
 
-V1 is a macOS WeChat 4.x contact database reader written in Go.
+这个项目的目标不是做另一个微信客户端，而是把属于自己的微信数据整理成可以被程序读取、检索和管理的数据源，用来管理自己的数字资产。这里的数字资产包括联系人、群、消息、媒体、文件、链接、关系网络，以及后续可以从这些数据中提取出来的知识、记录和上下文。
 
-Scope:
+V1 先从 macOS 微信 4.x 的联系人数据开始：自动获取 `contact/contact.db` 的数据库 key，解密联系人数据库，维护本地缓存，并通过 CLI 输出联系人和群。
 
-- Auto-detect `~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<account>/db_storage/contact/contact.db`
-- Auto-get the SQLCipher raw DB key from the running WeChat process
-- Decrypt only the main `contact/contact.db` into `~/.weview/cache/<account>/contact/contact.db`
-- Serve a local daemon over `~/.weview/weview.sock`
-- List all contacts from CLI
+## 设计目标
 
-Out of scope for V1:
+- 本地优先：微信数据、key、解密缓存都保存在本机。
+- 面向自动化：CLI 的 JSON、JSONL、CSV 输出方便其他 AI、脚本或系统调用。
+- 数据层复用：CLI 只是一个 controller。后续如果增加 Web API，也应该复用同一套 service 和缓存数据。
+- 渐进实现：V1 只做联系人闭环，先把 key、解密、缓存、查询链路跑通。
+- 明确边界：V1 不做 WAL patch，不做公开 Web API，不读取消息和媒体。
 
-- WAL patching
-- Public Web API
-- Message, media, image, voice, or transfer export
-- Windows/Linux and macOS WeChat 3.x
+## 当前能力
 
-## Commands
+- 自动检测 macOS 微信账号目录：
+  `~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<account>/db_storage`
+- 自动获取并验证 `contact/contact.db` 的 SQLCipher raw key。
+- 解密主数据库 `contact/contact.db` 到本地缓存：
+  `~/.weview/cache/<account>/contact/contact.db`
+- 启动本地 daemon，通过 `~/.weview/weview.sock` 做准实时刷新。
+- 通过 CLI 查询联系人、普通私聊联系人、群和其他联系人表记录。
+- 支持 `table`、`json`、`jsonl`、`csv` 输出。
+- 支持搜索、精确 username 查询、分页、排序和计数。
+
+## 支持命令
+
+### `weview init`
+
+首次使用时运行，一般只需要执行一次。
 
 ```sh
-go run ./cmd/weview init
+sudo go run ./cmd/weview init
+```
+
+它会检测微信账号目录，读取联系人数据库 salt，扫描正在运行的微信进程来获取数据库 key，验证成功后保存到：
+
+```sh
+~/.weview/keys.json
+```
+
+### `weview daemon`
+
+启动本地刷新进程。
+
+```sh
 go run ./cmd/weview daemon
+```
+
+daemon 会确保 key 可用，解密联系人数据库到缓存，然后监听主数据库变化。V1 不处理 `.db-wal`，所以这是准实时刷新：微信把变化写回主数据库后，缓存会刷新。
+
+daemon 使用本地 Unix socket：
+
+```sh
+~/.weview/weview.sock
+```
+
+这个 socket 是内部传输，不是公开 Web API。
+
+### `weview contacts`
+
+查询联系人。
+
+```sh
 go run ./cmd/weview contacts --format table
 go run ./cmd/weview contacts --format json
 go run ./cmd/weview contacts --format jsonl
-go run ./cmd/weview contacts --refresh --format json
+go run ./cmd/weview contacts --format csv
+```
+
+`weview contacts` 不带参数时只显示帮助，不直接查询数据。要查询数据，需要显式传入 `--format`、`--kind`、`--count` 等参数。
+
+常用查询：
+
+```sh
 go run ./cmd/weview contacts --kind friend --format table
 go run ./cmd/weview contacts --kind chatroom --format table
+go run ./cmd/weview contacts --kind friend --query AI --limit 20 --format json
+go run ./cmd/weview contacts --username wxid_xxx --format json
+go run ./cmd/weview contacts --kind friend --count
+go run ./cmd/weview contacts --refresh --format json
+```
+
+面向 AI 或其他系统调用时，优先使用：
+
+```sh
+go run ./cmd/weview contacts --kind friend --limit 100 --offset 0 --sort username --format json
+go run ./cmd/weview contacts --kind chatroom --format jsonl
+go run ./cmd/weview contacts --kind friend --format csv
+```
+
+完整参数说明请运行：
+
+```sh
 go run ./cmd/weview contacts --help
 ```
 
-`weview contacts` with no flags shows help. To query data, pass an explicit flag such as `--format` or `--kind`.
+#### 输出字段
 
-Contact queries use the daemon when it is running. If the daemon is not running, they read or refresh the local decrypted cache directly.
+- `username`：微信内部 username，例如 `wxid_*` 或 `*@chatroom`。
+- `alias`：微信号或别名。
+- `remark`：你给联系人设置的备注。
+- `nick_name`：联系人昵称。
+- `head_url`：头像图片 URL。
+- `kind`：`friend`、`chatroom` 或 `other`。
 
-Run `weview init` at the beginning. In normal use it only needs to be run once;
-it saves the verified contact DB key to `~/.weview/keys.json`.
+`kind` 的含义：
 
-Contact `kind` values:
+- `friend`：普通私聊联系人。
+- `chatroom`：群。
+- `other`：公众号、企业联系人、非好友群成员、系统联系人等其他联系人表记录。
+- `all`：查询参数，表示不过滤。
 
-- `friend`: ordinary private-chat contacts, currently `local_type = 1`, excluding `@chatroom` and `gh_*`
-- `chatroom`: group chats, detected by usernames ending in `@chatroom`
-- `other`: official accounts, enterprise contacts, non-friend room members, and special/system contacts
-- `all`: no filtering
+## 本地状态
 
-## Local State
+- 配置目录：`~/.weview/`
+- key 文件：`~/.weview/keys.json`
+- 联系人缓存：`~/.weview/cache/<account>/contact/contact.db`
+- daemon socket：`~/.weview/weview.sock`
 
-- Config directory: `~/.weview/`
-- Key store: `~/.weview/keys.json`, mode `0600`
-- Contact cache: `~/.weview/cache/<account>/contact/contact.db`
-- Daemon socket: `~/.weview/weview.sock`
+CLI 不会打印完整数据库 key，只会打印 fingerprint。
 
-The CLI prints only the key fingerprint, never the full DB key.
-
-If an older run created root-owned state, fix it once:
+如果之前用 `sudo` 产生过 root-owned 状态，可以修复一次权限：
 
 ```sh
 sudo chown -R "$USER":staff ~/.weview
 ```
 
-## Permissions
+## 权限说明
 
-Key scanning reads WeChat process memory. If scanning fails, make sure WeChat is running and run with the required macOS permission, for example `sudo`, or a WeChat binary signed with `get-task-allow` for local research.
+获取 key 需要读取正在运行的微信进程内存。失败时通常需要确认：
 
-The contact query and decrypted-cache validation use the system `sqlite3` executable.
+- 微信正在运行。
+- 使用了 `sudo`。
+- macOS 允许当前终端读取目标进程。
+- 某些 Hardened Runtime 构建可能需要本地研究环境下重新签名微信并开启 `get-task-allow`。
+
+## V1 边界
+
+当前版本只支持：
+
+- macOS 微信 4.x
+- `contact/contact.db`
+- 联系人和群查询
+
+当前版本不支持：
+
+- Windows / Linux
+- macOS 微信 3.x
+- 消息查询
+- 图片、语音、文件、视频等媒体解码
+- WAL patch
+- 公开 Web API
+
+这些能力后续可以在同一套 key、decrypt、cache、service 架构上继续扩展。

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -35,8 +36,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	ctx := context.Background()
 	switch args[0] {
-	case "init", "key":
-		return runKey(ctx, args[1:], stdout)
+	case "init":
+		return runInit(ctx, args[1:], stdout)
 	case "daemon":
 		return runDaemon(args[1:], stdout)
 	case "contact", "contacts":
@@ -80,6 +81,8 @@ Common examples:
   sudo weview init
   weview contacts --format json
   weview contacts --kind friend --format jsonl
+  weview contacts --kind friend --format csv
+  weview contacts --kind friend --query AI --limit 20 --format json
   weview contacts --kind chatroom --format table
   weview contacts --refresh --format json
   weview daemon
@@ -87,6 +90,7 @@ Common examples:
 Machine-readable usage:
   Use --format json for a JSON array.
   Use --format jsonl for one JSON object per line.
+  Use --format csv for spreadsheet/shell pipelines.
   Use --kind friend for ordinary private-chat contacts.
   Use --kind chatroom for groups present in the contact table.
 
@@ -102,8 +106,8 @@ Run:
 
 func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
 	switch command {
-	case "init", "key":
-		keyUsage(stdout)
+	case "init":
+		initUsage(stdout)
 	case "daemon":
 		daemonUsage(stdout)
 	case "contact", "contacts":
@@ -115,15 +119,12 @@ func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
 	return nil
 }
 
-func keyUsage(w io.Writer) {
+func initUsage(w io.Writer) {
 	fmt.Fprintln(w, `weview init - First-time setup for reading local WeChat data
 
 Usage:
   sudo weview init
   sudo go run ./cmd/weview init
-
-Compatibility:
-  sudo weview key
 
 When to run:
   Run this at the beginning before using contacts/daemon.
@@ -186,11 +187,12 @@ func contactsUsage(w io.Writer) {
 	fmt.Fprintln(w, `weview contacts - List WeChat contacts and contact-table groups
 
 Usage:
-  weview contacts
-  weview contacts [--format table|json|jsonl] [--kind all|friend|chatroom|other] [--refresh]
+  weview contacts --format table|json|jsonl|csv [flags]
+  weview contacts --count [flags]
   weview contacts --help
+
+Alias:
   weview contact
-  weview contact  [--format table|json|jsonl] [--kind all|friend|chatroom|other] [--refresh]
 
 No-argument behavior:
   weview contacts is intentionally the same as weview contacts --help.
@@ -200,14 +202,25 @@ Flags:
   --format table   Human-readable table output.
   --format json    Machine-readable JSON array.
   --format jsonl   Machine-readable newline-delimited JSON, one contact per line.
+  --format csv     Machine-readable CSV with header row.
 
   --kind all       Return every row selected from the contact table.
-  --kind friend    Ordinary private-chat contacts:
-                   local_type = 1, username not ending in @chatroom, username not starting with gh_.
-  --kind chatroom  Groups visible in the contact table:
-                   username ending in @chatroom.
+  --kind friend    Ordinary private-chat contacts.
+  --kind chatroom  Group chats.
   --kind other     Official accounts, enterprise contacts, non-friend room members,
                    and special/system contacts.
+
+  --query TEXT     Case-insensitive contains search over username, alias,
+                   remark, and nick_name.
+  --username TEXT  Exact username lookup, e.g. wxid_* or *@chatroom.
+  --limit N        Return at most N rows. 0 means no limit.
+  --offset N       Skip N rows before returning results. Requires stable sorting
+                   for paging; default sort is username.
+  --sort username  Sort by username. This is the default and best for paging.
+  --sort name      Sort by display name: remark, then nick_name, then alias,
+                   then username.
+  --count          Output only the number of rows after filters. Pagination
+                   flags --limit and --offset are ignored for counts.
 
   --refresh        Before listing, decrypt the source contact/contact.db into the
                    local cache again. Without --refresh, uses the existing cache
@@ -218,18 +231,23 @@ Output fields:
   alias       WeChat ID / alias when present.
   remark      Your remark for the contact.
   nick_name   Contact nickname from WeChat.
-  head_url    Raw big_head_url from contact.db.
+  head_url    Avatar image URL.
   kind        friend, chatroom, or other.
 
 Examples for humans:
   weview contacts --format table
   weview contacts --kind friend --format table
   weview contacts --kind chatroom --format table
+  weview contacts --kind friend --query AI --limit 20 --format table
 
 Examples for AI/tools:
   weview contacts --format json
   weview contacts --kind friend --format json
   weview contacts --kind chatroom --format jsonl
+  weview contacts --kind friend --format csv
+  weview contacts --kind friend --query AI --limit 20 --offset 0 --sort username --format json
+  weview contacts --username wxid_xxx --format json
+  weview contacts --kind friend --count
   weview contacts --refresh --format json
 
 Runtime behavior:
@@ -247,12 +265,12 @@ func hasHelp(args []string) bool {
 	return false
 }
 
-func runKey(ctx context.Context, args []string, stdout io.Writer) error {
+func runInit(ctx context.Context, args []string, stdout io.Writer) error {
 	if hasHelp(args) {
-		keyUsage(stdout)
+		initUsage(stdout)
 		return nil
 	}
-	fs := flag.NewFlagSet("key", flag.ContinueOnError)
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -307,24 +325,53 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	fs := flag.NewFlagSet("contacts", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	format := fs.String("format", "table", "table, json, or jsonl")
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
 	kind := fs.String("kind", contacts.KindAll, "all, friend, chatroom, or other")
+	query := fs.String("query", "", "contains search over username, alias, remark, and nick_name")
+	username := fs.String("username", "", "exact username lookup")
+	sortBy := fs.String("sort", "username", "username or name")
+	limit := fs.Int("limit", 0, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip before returning results")
+	countOnly := fs.Bool("count", false, "output only count after filters")
 	refresh := fs.Bool("refresh", false, "refresh decrypted contact cache before listing")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if !validFormat(*format) {
-		return fmt.Errorf("invalid format %q: use table, json, or jsonl", *format)
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
 	}
 	if !validKind(*kind) {
 		return fmt.Errorf("invalid kind %q: use all, friend, chatroom, or other", *kind)
+	}
+	if !validSort(*sortBy) {
+		return fmt.Errorf("invalid sort %q: use username or name", *sortBy)
+	}
+	if *limit < 0 {
+		return fmt.Errorf("invalid limit %d: must be >= 0", *limit)
+	}
+	if *offset < 0 {
+		return fmt.Errorf("invalid offset %d: must be >= 0", *offset)
 	}
 
 	list, err := listContacts(ctx, *refresh)
 	if err != nil {
 		return err
 	}
-	list = contacts.FilterByKind(list, *kind)
+	opts := contacts.QueryOptions{
+		Kind:     *kind,
+		Query:    *query,
+		Username: *username,
+		Sort:     *sortBy,
+		Limit:    *limit,
+		Offset:   *offset,
+	}
+	if *countOnly {
+		opts.Limit = 0
+		opts.Offset = 0
+		list = contacts.ApplyQueryOptions(list, opts)
+		return writeCount(stdout, len(list), *format)
+	}
+	list = contacts.ApplyQueryOptions(list, opts)
 	return writeContacts(stdout, list, *format)
 }
 
@@ -368,7 +415,7 @@ func listContacts(ctx context.Context, refresh bool) ([]contacts.Contact, error)
 
 func validFormat(format string) bool {
 	switch format {
-	case "table", "json", "jsonl":
+	case "table", "json", "jsonl", "csv":
 		return true
 	default:
 		return false
@@ -384,6 +431,17 @@ func validKind(kind string) bool {
 	}
 }
 
+func validSort(sortBy string) bool {
+	switch sortBy {
+	case "username", "name":
+		return true
+	default:
+		return false
+	}
+}
+
+var defaultContactFields = []string{"username", "alias", "remark", "nick_name", "head_url", "kind"}
+
 func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 	switch format {
 	case "json":
@@ -398,22 +456,80 @@ func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 			}
 		}
 		return nil
+	case "csv":
+		cw := csv.NewWriter(w)
+		if err := cw.Write(defaultContactFields); err != nil {
+			return err
+		}
+		for _, contact := range list {
+			if err := cw.Write(contactValues(contact)); err != nil {
+				return err
+			}
+		}
+		cw.Flush()
+		return cw.Error()
 	case "table":
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "USERNAME\tALIAS\tREMARK\tNICK_NAME\tHEAD_URL\tKIND")
+		fmt.Fprintln(tw, strings.ToUpper(strings.Join(defaultContactFields, "\t")))
 		for _, contact := range list {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				cleanCell(contact.Username),
-				cleanCell(contact.Alias),
-				cleanCell(contact.Remark),
-				cleanCell(contact.NickName),
-				cleanCell(contact.HeadURL),
-				cleanCell(contact.Kind),
-			)
+			values := contactValues(contact)
+			for i := range values {
+				values[i] = cleanCell(values[i])
+			}
+			fmt.Fprintln(tw, strings.Join(values, "\t"))
 		}
 		return tw.Flush()
 	default:
 		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeCount(w io.Writer, count int, format string) error {
+	switch format {
+	case "json", "jsonl":
+		return json.NewEncoder(w).Encode(map[string]int{"count": count})
+	case "csv":
+		cw := csv.NewWriter(w)
+		if err := cw.Write([]string{"count"}); err != nil {
+			return err
+		}
+		if err := cw.Write([]string{fmt.Sprintf("%d", count)}); err != nil {
+			return err
+		}
+		cw.Flush()
+		return cw.Error()
+	case "table":
+		_, err := fmt.Fprintf(w, "%d\n", count)
+		return err
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func contactValues(contact contacts.Contact) []string {
+	values := make([]string, 0, len(defaultContactFields))
+	for _, field := range defaultContactFields {
+		values = append(values, contactValue(contact, field))
+	}
+	return values
+}
+
+func contactValue(contact contacts.Contact, field string) string {
+	switch field {
+	case "username":
+		return contact.Username
+	case "alias":
+		return contact.Alias
+	case "remark":
+		return contact.Remark
+	case "nick_name":
+		return contact.NickName
+	case "head_url":
+		return contact.HeadURL
+	case "kind":
+		return contact.Kind
+	default:
+		return ""
 	}
 }
 

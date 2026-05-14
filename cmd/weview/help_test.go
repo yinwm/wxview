@@ -32,7 +32,11 @@ func TestContactsHelpIsActionable(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"--format json",
+		"--format csv",
 		"--kind friend",
+		"--query TEXT",
+		"--limit N",
+		"--count",
 		"Output fields",
 		"Examples for AI/tools",
 	} {
@@ -66,5 +70,16 @@ func TestContractHelpTypoAlias(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "official command is `contacts`") {
 		t.Fatalf("expected typo alias note:\n%s", out.String())
+	}
+}
+
+func TestKeyCommandIsNotAccepted(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{"key"}, &out, &out)
+	if err == nil {
+		t.Fatal("expected key command to be rejected")
+	}
+	if strings.Contains(out.String(), "sudo weview key") {
+		t.Fatalf("key command should not be advertised:\n%s", out.String())
 	}
 }

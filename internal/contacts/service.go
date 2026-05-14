@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"weview/internal/sqlitecli"
@@ -28,6 +29,15 @@ type Contact struct {
 	Kind     string `json:"kind"`
 }
 
+type QueryOptions struct {
+	Kind     string
+	Query    string
+	Username string
+	Sort     string
+	Limit    int
+	Offset   int
+}
+
 type Service struct {
 	CacheDB string
 }
@@ -42,7 +52,7 @@ func (s Service) List(ctx context.Context) ([]Contact, error) {
 	}
 	if _, err := os.Stat(s.CacheDB); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("contact cache does not exist: run `weview contacts --refresh` or `weview key` first")
+			return nil, fmt.Errorf("contact cache does not exist: run `weview contacts --refresh` or `weview init` first")
 		}
 		return nil, err
 	}
@@ -110,4 +120,84 @@ func FilterByKind(list []Contact, kind string) []Contact {
 		}
 	}
 	return out
+}
+
+func ApplyQueryOptions(list []Contact, opts QueryOptions) []Contact {
+	filtered := make([]Contact, 0, len(list))
+	query := strings.ToLower(strings.TrimSpace(opts.Query))
+	username := strings.TrimSpace(opts.Username)
+	for _, contact := range list {
+		if opts.Kind != "" && opts.Kind != KindAll && contact.Kind != opts.Kind {
+			continue
+		}
+		if username != "" && contact.Username != username {
+			continue
+		}
+		if query != "" && !matchesQuery(contact, query) {
+			continue
+		}
+		filtered = append(filtered, contact)
+	}
+	sortContacts(filtered, opts.Sort)
+	return paginate(filtered, opts.Limit, opts.Offset)
+}
+
+func matchesQuery(contact Contact, query string) bool {
+	for _, value := range []string{contact.Username, contact.Alias, contact.Remark, contact.NickName} {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortContacts(list []Contact, sortBy string) {
+	switch sortBy {
+	case "", "username":
+		sort.SliceStable(list, func(i, j int) bool {
+			return strings.ToLower(list[i].Username) < strings.ToLower(list[j].Username)
+		})
+	case "name":
+		sort.SliceStable(list, func(i, j int) bool {
+			left := strings.ToLower(displayName(list[i]))
+			right := strings.ToLower(displayName(list[j]))
+			if left == right {
+				return strings.ToLower(list[i].Username) < strings.ToLower(list[j].Username)
+			}
+			return left < right
+		})
+	}
+}
+
+func displayName(contact Contact) string {
+	if strings.TrimSpace(contact.Remark) != "" {
+		return contact.Remark
+	}
+	if strings.TrimSpace(contact.NickName) != "" {
+		return contact.NickName
+	}
+	if strings.TrimSpace(contact.Alias) != "" {
+		return contact.Alias
+	}
+	return contact.Username
+}
+
+func paginate(list []Contact, limit int, offset int) []Contact {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	if offset >= len(list) {
+		return []Contact{}
+	}
+	if limit == 0 {
+		return list[offset:]
+	}
+	end := offset + limit
+	if end > len(list) {
+		end = len(list)
+	}
+	return list[offset:end]
 }

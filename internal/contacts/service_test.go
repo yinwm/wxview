@@ -71,6 +71,44 @@ func TestFilterByKind(t *testing.T) {
 	}
 }
 
+func TestApplyQueryOptionsFiltersSortsAndPaginates(t *testing.T) {
+	list := []Contact{
+		{Username: "wxid_b", Alias: "bbb", Remark: "", NickName: "Beta", Kind: KindFriend},
+		{Username: "wxid_a", Alias: "aaa", Remark: "Alice", NickName: "Zed", Kind: KindFriend},
+		{Username: "200@chatroom", Remark: "Room", NickName: "Group", Kind: KindChatroom},
+		{Username: "gh_x", NickName: "Official", Kind: KindOther},
+	}
+
+	got := ApplyQueryOptions(list, QueryOptions{
+		Kind:  KindFriend,
+		Query: "a",
+		Sort:  "name",
+		Limit: 1,
+	})
+	if len(got) != 1 {
+		t.Fatalf("got %d contacts, want 1: %+v", len(got), got)
+	}
+	if got[0].Username != "wxid_a" {
+		t.Fatalf("first contact = %+v", got[0])
+	}
+
+	got = ApplyQueryOptions(list, QueryOptions{
+		Username: "200@chatroom",
+	})
+	if len(got) != 1 || got[0].Kind != KindChatroom {
+		t.Fatalf("username filter = %+v", got)
+	}
+
+	got = ApplyQueryOptions(list, QueryOptions{
+		Sort:   "username",
+		Limit:  2,
+		Offset: 1,
+	})
+	if len(got) != 2 || got[0].Username != "gh_x" || got[1].Username != "wxid_a" {
+		t.Fatalf("pagination = %+v", got)
+	}
+}
+
 func TestClassifyKind(t *testing.T) {
 	tests := []struct {
 		username  string
