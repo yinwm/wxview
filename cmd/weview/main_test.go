@@ -16,7 +16,7 @@ func TestWriteContactsJSON(t *testing.T) {
 		Remark:   "r1",
 		NickName: "n1",
 		HeadURL:  "https://example.com/1",
-		IsFriend: true,
+		Kind:     contacts.KindFriend,
 	}}
 	var out bytes.Buffer
 	if err := writeContacts(&out, list, "json"); err != nil {
@@ -26,15 +26,15 @@ func TestWriteContactsJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].HeadURL != "https://example.com/1" || !got[0].IsFriend {
+	if len(got) != 1 || got[0].HeadURL != "https://example.com/1" || got[0].Kind != contacts.KindFriend {
 		t.Fatalf("unexpected json output: %+v", got)
 	}
 }
 
 func TestWriteContactsJSONL(t *testing.T) {
 	list := []contacts.Contact{
-		{Username: "u1", NickName: "u1"},
-		{Username: "u2", NickName: "u2"},
+		{Username: "u1", NickName: "u1", Kind: contacts.KindFriend},
+		{Username: "u2", NickName: "u2", Kind: contacts.KindChatroom},
 	}
 	var out bytes.Buffer
 	if err := writeContacts(&out, list, "jsonl"); err != nil {

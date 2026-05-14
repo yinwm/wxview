@@ -7,8 +7,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"weview/internal/sqlitecli"
+)
+
+const (
+	KindAll      = "all"
+	KindFriend   = "friend"
+	KindChatroom = "chatroom"
+	KindOther    = "other"
 )
 
 type Contact struct {
@@ -17,7 +25,7 @@ type Contact struct {
 	Remark   string `json:"remark"`
 	NickName string `json:"nick_name"`
 	HeadURL  string `json:"head_url"`
-	IsFriend bool   `json:"is_friend"`
+	Kind     string `json:"kind"`
 }
 
 type Service struct {
@@ -74,9 +82,32 @@ ORDER BY COALESCE(NULLIF(remark, ''), NULLIF(nick_name, ''), username) COLLATE N
 			Remark:   row.Remark,
 			NickName: row.NickName,
 			HeadURL:  row.HeadURL,
-			IsFriend: row.LocalType != 3,
+			Kind:     ClassifyKind(row.Username, row.LocalType),
 		}
 		contacts = append(contacts, contact)
 	}
 	return contacts, nil
+}
+
+func ClassifyKind(username string, localType int) string {
+	if strings.HasSuffix(username, "@chatroom") {
+		return KindChatroom
+	}
+	if localType == 1 && !strings.HasPrefix(username, "gh_") {
+		return KindFriend
+	}
+	return KindOther
+}
+
+func FilterByKind(list []Contact, kind string) []Contact {
+	if kind == "" || kind == KindAll {
+		return list
+	}
+	out := make([]Contact, 0, len(list))
+	for _, contact := range list {
+		if contact.Kind == kind {
+			out = append(out, contact)
+		}
+	}
+	return out
 }
