@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -59,6 +60,7 @@ func (s Service) List(ctx context.Context) ([]Contact, error) {
 
 	query := `
 SELECT
+  COALESCE(id, 0) AS id,
   username,
   COALESCE(local_type, 0) AS local_type,
   COALESCE(alias, '') AS alias,
@@ -74,6 +76,7 @@ ORDER BY COALESCE(NULLIF(remark, ''), NULLIF(nick_name, ''), username) COLLATE N
 		return nil, fmt.Errorf("query contact cache: %v: %s", err, bytes.TrimSpace(out))
 	}
 	var rows []struct {
+		ID        int    `json:"id"`
 		Username  string `json:"username"`
 		LocalType int    `json:"local_type"`
 		Alias     string `json:"alias"`
@@ -84,6 +87,7 @@ ORDER BY COALESCE(NULLIF(remark, ''), NULLIF(nick_name, ''), username) COLLATE N
 	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, fmt.Errorf("parse sqlite json: %w", err)
 	}
+	ownerUsername := ownerUsernameFromCachePath(s.CacheDB)
 	contacts := make([]Contact, 0, len(rows))
 	for _, row := range rows {
 		contact := Contact{
@@ -92,7 +96,7 @@ ORDER BY COALESCE(NULLIF(remark, ''), NULLIF(nick_name, ''), username) COLLATE N
 			Remark:   row.Remark,
 			NickName: row.NickName,
 			HeadURL:  row.HeadURL,
-			Kind:     ClassifyKind(row.Username, row.LocalType),
+			Kind:     ClassifyKindForAccount(row.Username, row.LocalType, row.ID, ownerUsername),
 		}
 		contacts = append(contacts, contact)
 	}
@@ -107,6 +111,36 @@ func ClassifyKind(username string, localType int) string {
 		return KindFriend
 	}
 	return KindOther
+}
+
+func ClassifyKindForAccount(username string, localType int, contactID int, ownerUsername string) string {
+	if isSelfContact(username, contactID, ownerUsername) {
+		return KindOther
+	}
+	return ClassifyKind(username, localType)
+}
+
+func isSelfContact(username string, contactID int, ownerUsername string) bool {
+	if ownerUsername != "" && username == ownerUsername {
+		return true
+	}
+	return contactID == 2 && strings.HasPrefix(username, "wxid_")
+}
+
+func ownerUsernameFromCachePath(cacheDB string) string {
+	account := filepath.Base(filepath.Dir(filepath.Dir(cacheDB)))
+	if !strings.HasPrefix(account, "wxid_") {
+		return account
+	}
+	idx := strings.LastIndex(account, "_")
+	if idx <= len("wxid_") {
+		return account
+	}
+	candidate := account[:idx]
+	if strings.HasPrefix(candidate, "wxid_") {
+		return candidate
+	}
+	return account
 }
 
 func FilterByKind(list []Contact, kind string) []Contact {

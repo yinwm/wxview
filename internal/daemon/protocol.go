@@ -3,6 +3,7 @@ package daemon
 const (
 	ActionHealth          = "health"
 	ActionRefreshContacts = "refresh_contacts"
+	ActionRefreshMessages = "refresh_messages"
 	ActionStop            = "stop"
 )
 

@@ -11,7 +11,6 @@ import (
 const (
 	Name        = "weview"
 	ConfigDir   = ".weview"
-	KeyFileName = "keys.json"
 	SocketName  = "weview.sock"
 	LogFileName = "weview.log"
 )
@@ -50,14 +49,6 @@ func EnsureBaseDir() (string, error) {
 	return base, nil
 }
 
-func KeyStorePath() (string, error) {
-	base, err := EnsureBaseDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, KeyFileName), nil
-}
-
 func SocketPath() (string, error) {
 	base, err := EnsureBaseDir()
 	if err != nil {
@@ -79,7 +70,18 @@ func CacheDBPath(account string, relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "cache", SafeAccountDir(account), relPath), nil
+	cacheRoot := filepath.Join(base, "cache")
+	accountDir := filepath.Join(cacheRoot, SafeAccountDir(account))
+	if err := os.MkdirAll(accountDir, 0o700); err != nil {
+		return "", err
+	}
+	if err := ChownForSudo(cacheRoot); err != nil {
+		return "", err
+	}
+	if err := ChownForSudo(accountDir); err != nil {
+		return "", err
+	}
+	return filepath.Join(accountDir, relPath), nil
 }
 
 func SafeAccountDir(account string) string {

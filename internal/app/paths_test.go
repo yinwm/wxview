@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestSudoOwnerFromEnv(t *testing.T) {
 	uid, gid, ok := sudoOwnerFromEnv(0, "501", "20")
@@ -20,8 +24,8 @@ func TestSudoOwnerFromEnv(t *testing.T) {
 }
 
 func TestSafeAccountDirKeepsReadableWeChatID(t *testing.T) {
-	got := SafeAccountDir("wxid_c7zf4hpjug5322_bcc2")
-	if got != "wxid_c7zf4hpjug5322_bcc2" {
+	got := SafeAccountDir("wxid_example_bcc2")
+	if got != "wxid_example_bcc2" {
 		t.Fatalf("SafeAccountDir = %q", got)
 	}
 }
@@ -30,5 +34,32 @@ func TestSafeAccountDirSanitizesPathSeparators(t *testing.T) {
 	got := SafeAccountDir("a/b c")
 	if got != "a_b_c" {
 		t.Fatalf("SafeAccountDir = %q", got)
+	}
+}
+
+func TestCacheDBPathCreatesAccountDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := CacheDBPath("a/b c", "keys.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ConfigDir, "cache", "a_b_c", "keys.json")
+	if got != want {
+		t.Fatalf("CacheDBPath = %q, want %q", got, want)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ConfigDir),
+		filepath.Join(home, ConfigDir, "cache"),
+		filepath.Join(home, ConfigDir, "cache", "a_b_c"),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s is not a directory", path)
+		}
 	}
 }

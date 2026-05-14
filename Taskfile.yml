@@ -1,0 +1,44 @@
+version: "3"
+
+vars:
+  BIN: ./bin/weview
+  GOCACHE: "{{.ROOT_DIR}}/.cache/go-build"
+
+tasks:
+  default:
+    desc: Build the weview binary
+    cmds:
+      - task: build
+
+  build:
+    desc: Build ./bin/weview
+    env:
+      GOCACHE: "{{.GOCACHE}}"
+    cmds:
+      - mkdir -p bin
+      - go build -o "{{.BIN}}" ./cmd/weview
+
+  test:
+    desc: Run all tests
+    env:
+      GOCACHE: "{{.GOCACHE}}"
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run go vet
+    env:
+      GOCACHE: "{{.GOCACHE}}"
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Run tests and vet
+    cmds:
+      - task: test
+      - task: vet
+
+  clean:
+    desc: Remove local build outputs
+    cmds:
+      - rm -rf bin

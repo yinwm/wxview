@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -13,10 +14,10 @@ func TestListReturnsConfiguredContactFields(t *testing.T) {
 	}
 	db := filepath.Join(t.TempDir(), "contact.db")
 	sql := `
-CREATE TABLE contact (username TEXT, local_type INTEGER, alias TEXT, remark TEXT, nick_name TEXT, big_head_url TEXT);
-INSERT INTO contact VALUES ('u1', 1, 'alias1', 'Remark 1', 'Nick 1', 'https://example.com/1');
-INSERT INTO contact VALUES ('10000@chatroom', 1, '', '', 'Group 1', '');
-INSERT INTO contact VALUES ('gh_x', 1, '', '', 'OA', '');
+CREATE TABLE contact (id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT, nick_name TEXT, big_head_url TEXT);
+INSERT INTO contact VALUES (1, 'u1', 1, 'alias1', 'Remark 1', 'Nick 1', 'https://example.com/1');
+INSERT INTO contact VALUES (3, '10000@chatroom', 1, '', '', 'Group 1', '');
+INSERT INTO contact VALUES (4, 'gh_x', 1, '', '', 'OA', '');
 `
 	if out, err := exec.Command("sqlite3", db, sql).CombinedOutput(); err != nil {
 		t.Fatalf("create db: %v: %s", err, out)
@@ -53,6 +54,39 @@ INSERT INTO contact VALUES ('gh_x', 1, '', '', 'OA', '');
 	}
 	if byUser["gh_x"].Kind != KindOther {
 		t.Fatalf("gh_x kind = %q", byUser["gh_x"].Kind)
+	}
+}
+
+func TestListClassifiesCurrentAccountAsOther(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is required for contact query tests")
+	}
+	dir := filepath.Join(t.TempDir(), "cache", "wxid_self_abcd", "contact")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "contact.db")
+	sql := `
+CREATE TABLE contact (id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT, nick_name TEXT, big_head_url TEXT);
+INSERT INTO contact VALUES (2, 'wxid_self', 1, 'me_alias', '', 'Me', '');
+INSERT INTO contact VALUES (3, 'wxid_friend', 1, '', '', 'Friend', '');
+`
+	if out, err := exec.Command("sqlite3", db, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create db: %v: %s", err, out)
+	}
+	got, err := NewService(db).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byUser := map[string]Contact{}
+	for _, c := range got {
+		byUser[c.Username] = c
+	}
+	if byUser["wxid_self"].Kind != KindOther {
+		t.Fatalf("self kind = %q, want other", byUser["wxid_self"].Kind)
+	}
+	if byUser["wxid_friend"].Kind != KindFriend {
+		t.Fatalf("friend kind = %q, want friend", byUser["wxid_friend"].Kind)
 	}
 }
 

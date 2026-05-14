@@ -16,3 +16,23 @@ type TargetDB struct {
 func DiscoverContactDB() (TargetDB, error) {
 	return TargetDB{}, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
 }
+
+func DiscoverMessageDBs() ([]TargetDB, error) {
+	return nil, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
+}
+
+func DiscoverMessageRelatedDBs() ([]TargetDB, error) {
+	return nil, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
+}
+
+func DiscoverMessageAuxDBs() ([]TargetDB, error) {
+	return nil, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
+}
+
+func DiscoverRequiredDBs() ([]TargetDB, error) {
+	return nil, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
+}
+
+func DiscoverSupportedDBs() ([]TargetDB, error) {
+	return nil, fmt.Errorf("automatic WeChat discovery is only implemented for macOS WeChat 4.x in V1")
+}

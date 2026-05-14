@@ -1,0 +1,437 @@
+package messages
+
+import (
+	"context"
+	"crypto/md5"
+	"encoding/hex"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	zstdpkg "github.com/klauspost/compress/zstd"
+
+	"weview/internal/media"
+)
+
+func TestListMergesShardsSortsAscendingAndPaginates(t *testing.T) {
+	dir := t.TempDir()
+	db1 := filepath.Join(dir, "message_0.db")
+	db2 := filepath.Join(dir, "message_1.db")
+	table := TableName("alice")
+
+	createMessageDB(t, db1, table, []messageRow{
+		{LocalID: 1, SortSeq: 1001, CreateTime: 100, Status: 4, Content: "first"},
+		{LocalID: 3, SortSeq: 3001, CreateTime: 300, Status: 2, Content: "third"},
+	})
+	createMessageDB(t, db2, table, []messageRow{
+		{LocalID: 2, SortSeq: 2001, CreateTime: 200, Status: 4, Content: "second"},
+		{LocalID: 4, SortSeq: 4001, CreateTime: 400, Status: 4, Content: "outside"},
+	})
+
+	got, err := NewService([]string{db1, db2}).List(context.Background(), QueryOptions{
+		Username: "alice",
+		Start:    100,
+		End:      300,
+		HasStart: true,
+		HasEnd:   true,
+		Limit:    2,
+		Offset:   1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2: %+v", len(got), got)
+	}
+	if got[0].Content != "second" || got[0].CreateTime != 200 {
+		t.Fatalf("first paged message = %+v, want second at 200", got[0])
+	}
+	if got[0].ChatUsername != "alice" || got[0].FromUsername != "alice" || got[0].Direction != "in" || got[0].IsSelf {
+		t.Fatalf("first paged identity = %+v, want incoming alice message", got[0])
+	}
+	if got[1].Content != "third" || got[1].FromUsername != "self" || got[1].Direction != "out" || !got[1].IsSelf {
+		t.Fatalf("second paged message = %+v, want self third", got[1])
+	}
+	if got[1].Source != nil {
+		t.Fatalf("source should be omitted by default: %+v", got[1].Source)
+	}
+}
+
+func TestListParsesChatroomSenderPrefix(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("room@chatroom")
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 1, SortSeq: 1001, CreateTime: 100, Status: 4, Content: "wxid_sender:\nhello room"},
+	})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "room@chatroom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].FromUsername != "wxid_sender" || got[0].Content != "wxid_sender:\nhello room" || !got[0].IsChatroom {
+		t.Fatalf("unexpected group message normalization: %+v", got[0])
+	}
+	if got[0].ContentDetail["text"] != "hello room" {
+		t.Fatalf("unexpected group message detail: %+v", got[0].ContentDetail)
+	}
+}
+
+func TestListNormalizesChatroomImageDetailWithoutChangingRawContent(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("room@chatroom")
+	content := `wxid_sender:
+<?xml version="1.0"?>
+<msg>
+  <img cdnthumburl="thumb-file-id" cdnthumblength="3768" cdnthumbheight="432" cdnthumbwidth="173" cdnmidheight="0" cdnmidwidth="0" cdnmidimgurl="mid-file-id" length="446018" md5="90acf8a0ba4bbc0c22218b6887797d8b" hevc_mid_size="185480" originsourcemd5="a56a063b789f8436d209bb9d472ed96e"></img>
+</msg>`
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 1, SortSeq: 1001, CreateTime: 100, LocalType: 3, Status: 4, Content: content},
+	})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "room@chatroom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].Content != content || got[0].FromUsername != "wxid_sender" {
+		t.Fatalf("raw content or sender changed unexpectedly: %+v", got[0])
+	}
+	detail := got[0].ContentDetail
+	if detail["type"] != "image" || detail["text"] != "[图片]" {
+		t.Fatalf("unexpected image detail identity: %+v", detail)
+	}
+	if detail["md5"] != "90acf8a0ba4bbc0c22218b6887797d8b" || detail["length"] != "446018" || detail["cdn_thumb_width"] != "173" || detail["cdn_thumb_height"] != "432" {
+		t.Fatalf("missing image metadata: %+v", detail)
+	}
+	if detail["cdn_mid_width"] != "" || detail["cdn_mid_height"] != "" {
+		t.Fatalf("zero image dimensions should be omitted: %+v", detail)
+	}
+}
+
+func TestListAddsImagePathWithoutChangingImageText(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	chat := "alice"
+	table := TableName(chat)
+	dataDir := filepath.Join(dir, "wxid_owner_bcc2", "db_storage")
+	imageDir := filepath.Join(dir, "wxid_owner_bcc2", "Message", "MessageTemp", md5HexForTest(chat), "Image")
+	if err := os.MkdirAll(imageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := filepath.Join(imageDir, "71700000000_.pic_thumb.jpg")
+	writePNGForTest(t, imagePath, 2, 3)
+
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 7, SortSeq: 1001, CreateTime: 1700000000, LocalType: 3, Status: 4, Content: "<msg><img /></msg>"},
+	})
+	resolver := media.NewResolver(dataDir, filepath.Join(dir, "cache"))
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: chat, MediaResolver: &resolver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	detail := got[0].ContentDetail
+	if detail["text"] != "[图片]" {
+		t.Fatalf("image text = %q, want [图片]; detail=%+v", detail["text"], detail)
+	}
+	if detail["path"] != imagePath || detail["width"] != "2" || detail["height"] != "3" || detail["media_status"] != "resolved" {
+		t.Fatalf("unexpected resolved image detail: %+v", detail)
+	}
+}
+
+func TestListFiltersAfterSeq(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 1, SortSeq: 1001, CreateTime: 100, Content: "first"},
+		{LocalID: 2, SortSeq: 2001, CreateTime: 200, Content: "second"},
+		{LocalID: 3, SortSeq: 3001, CreateTime: 300, Content: "third"},
+	})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{
+		Username:    "alice",
+		AfterSeq:    2001,
+		HasAfterSeq: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Seq != 3001 || got[0].Content != "third" {
+		t.Fatalf("after-seq result = %+v, want only third", got)
+	}
+}
+
+func TestListInfersSelfFromRealSenderID(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{{
+		LocalID:      1,
+		SortSeq:      1001,
+		CreateTime:   100,
+		Status:       0,
+		RealSenderID: 2,
+		Content:      "self greeting",
+	}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].FromUsername != "self_user" || got[0].Direction != "out" || !got[0].IsSelf {
+		t.Fatalf("sender = %+v, want real sender username/out inferred from real_sender_id", got[0])
+	}
+}
+
+func TestListInfersPrivateSelfWhenTalkerDiffersFromSenderName(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{{
+		LocalID:      1,
+		SortSeq:      1001,
+		CreateTime:   100,
+		Status:       0,
+		RealSenderID: 9,
+		SenderName:   "owner_wxid",
+		Content:      "private self greeting",
+	}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].FromUsername != "owner_wxid" || got[0].Direction != "out" || !got[0].IsSelf {
+		t.Fatalf("sender = %+v, want chatlog-style private self inference", got[0])
+	}
+}
+
+func TestListDecodesZstdContentAndSplitsType(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{{
+		LocalID:     1,
+		SortSeq:     1001,
+		CreateTime:  100,
+		LocalType:   21474836529,
+		ContentBlob: zstdCompress(t, "hello zstd"),
+	}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].Content != "hello zstd" || got[0].ContentEncoding != "zstd" {
+		t.Fatalf("unexpected zstd content: %+v", got[0])
+	}
+	if got[0].Type != 49 || got[0].SubType != 5 {
+		t.Fatalf("type split = (%d,%d), want (49,5)", got[0].Type, got[0].SubType)
+	}
+}
+
+func TestListNormalizesAppMsgLink(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	content := `<?xml version="1.0"?>
+<msg>
+  <appmsg>
+    <title>Readable title</title>
+    <des>Readable desc</des>
+    <type>5</type>
+    <url>https://example.com/a?x=1&amp;y=2</url>
+    <sourceusername>gh_test</sourceusername>
+    <sourcedisplayname>Source Name</sourcedisplayname>
+  </appmsg>
+</msg>`
+	createMessageDB(t, db, table, []messageRow{{
+		LocalID:    1,
+		SortSeq:    1001,
+		CreateTime: 100,
+		LocalType:  21474836529,
+		Content:    content,
+	}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].Content != content {
+		t.Fatalf("content was modified:\n got: %q\nwant: %q", got[0].Content, content)
+	}
+	wantDetailText := "[链接|Readable title](https://example.com/a?x=1&y=2)\nReadable desc"
+	if got[0].ContentDetail["type"] != "link" || got[0].ContentDetail["text"] != wantDetailText {
+		t.Fatalf("unexpected normalized link detail: %+v", got[0].ContentDetail)
+	}
+	if got[0].ContentDetail["title"] != "Readable title" || got[0].ContentDetail["url"] != "https://example.com/a?x=1&y=2" {
+		t.Fatalf("unexpected link details: %+v", got[0].ContentDetail)
+	}
+}
+
+func TestListIncludesSourceWhenRequested(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_31.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{{LocalID: 7, SortSeq: 1001, CreateTime: 100, Content: "hello"}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice", IncludeSource: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Source == nil {
+		t.Fatalf("source missing: %+v", got)
+	}
+	if got[0].Source.DB != "message_31.db" || got[0].Source.Table != table || got[0].Source.LocalID != 7 {
+		t.Fatalf("unexpected source: %+v", got[0].Source)
+	}
+}
+
+func TestListReturnsEmptyWhenTableMissing(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	createMessageDB(t, db, TableName("bob"), []messageRow{{LocalID: 1, SortSeq: 1, CreateTime: 1, Content: "bob"}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got messages for missing table: %+v", got)
+	}
+}
+
+type messageRow struct {
+	LocalID      int64
+	SortSeq      int64
+	CreateTime   int64
+	Status       int64
+	LocalType    int64
+	RealSenderID int64
+	SenderName   string
+	Content      string
+	ContentBlob  []byte
+}
+
+func createMessageDB(t *testing.T, path string, table string, rows []messageRow) {
+	t.Helper()
+	sql := fmt.Sprintf(`
+CREATE TABLE [%s] (
+  local_id INTEGER PRIMARY KEY,
+  server_id INTEGER,
+  local_type INTEGER,
+  sort_seq INTEGER,
+  real_sender_id INTEGER,
+  create_time INTEGER,
+  status INTEGER,
+  message_content BLOB,
+  WCDB_CT_message_content INTEGER
+);
+CREATE TABLE Name2Id(user_name TEXT PRIMARY KEY, is_session INTEGER);
+INSERT INTO Name2Id(rowid, user_name, is_session) VALUES (2, 'self_user', 0);
+`, table)
+	for _, row := range rows {
+		localType := row.LocalType
+		if localType == 0 {
+			localType = 1
+		}
+		realSenderID := row.RealSenderID
+		contentSQL := sqlQuote(row.Content)
+		if row.ContentBlob != nil {
+			contentSQL = "X'" + hex.EncodeToString(row.ContentBlob) + "'"
+		}
+		if row.SenderName != "" && realSenderID != 0 && realSenderID != 2 {
+			sql += fmt.Sprintf("INSERT INTO Name2Id(rowid, user_name, is_session) VALUES (%d, %s, 0);\n", realSenderID, sqlQuote(row.SenderName))
+		}
+		sql += fmt.Sprintf(
+			"INSERT INTO [%s] (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, message_content, WCDB_CT_message_content) VALUES (%d, 0, %d, %d, %d, %d, %d, %s, 0);\n",
+			table,
+			row.LocalID,
+			localType,
+			row.SortSeq,
+			realSenderID,
+			row.CreateTime,
+			row.Status,
+			contentSQL,
+		)
+	}
+	if out, err := exec.Command("sqlite3", path, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create message db: %v: %s", err, out)
+	}
+}
+
+func zstdCompress(t *testing.T, text string) []byte {
+	t.Helper()
+	encoder, err := zstdpkg.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	return encoder.EncodeAll([]byte(text), nil)
+}
+
+func sqlQuote(s string) string {
+	out := "'"
+	for _, r := range s {
+		if r == '\'' {
+			out += "''"
+			continue
+		}
+		out += string(r)
+	}
+	return out + "'"
+}
+
+func md5HexForTest(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func writePNGForTest(t *testing.T, path string, width int, height int) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 0x22, G: 0x66, B: 0xaa, A: 0xff})
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := png.Encode(file, img); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -10,7 +10,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"weview/internal/app"
 )
+
+const keyStoreRelPath = "keys.json"
 
 type Entry struct {
 	Account     string    `json:"account"`
@@ -27,31 +31,43 @@ type Store struct {
 	Keys    []Entry `json:"keys"`
 }
 
+type storeFile struct {
+	Version int                   `json:"version"`
+	Account string                `json:"account"`
+	DataDir string                `json:"data_dir"`
+	Keys    map[string]dbKeyStore `json:"keys"`
+}
+
+type dbKeyStore struct {
+	Key         string    `json:"key"`
+	Salt        string    `json:"salt"`
+	Fingerprint string    `json:"fingerprint"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 func LoadStore(path string) (Store, error) {
-	var store Store
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Store{Version: 1}, nil
 		}
-		return store, err
+		return Store{}, err
 	}
 	if len(data) == 0 {
 		return Store{Version: 1}, nil
 	}
-	if err := json.Unmarshal(data, &store); err != nil {
-		return store, err
+	var file storeFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return Store{}, err
 	}
-	if store.Version == 0 {
-		store.Version = 1
+	if file.Version == 0 {
+		file.Version = 1
 	}
-	return store, nil
+	return flattenStoreFile(file), nil
 }
 
 func SaveStore(path string, store Store) error {
-	if store.Version == 0 {
-		store.Version = 1
-	}
+	store.Version = 1
 	sort.SliceStable(store.Keys, func(i, j int) bool {
 		if store.Keys[i].Account != store.Keys[j].Account {
 			return store.Keys[i].Account < store.Keys[j].Account
@@ -64,7 +80,7 @@ func SaveStore(path string, store Store) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(store, "", "  ")
+	data, err := json.MarshalIndent(groupStoreFile(store), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -92,6 +108,61 @@ func SaveStore(path string, store Store) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func KeyStorePath(account string) (string, error) {
+	return app.CacheDBPath(account, keyStoreRelPath)
+}
+
+func CompactStoreFile(account string) error {
+	storePath, err := KeyStorePath(account)
+	if err != nil {
+		return err
+	}
+	store, err := LoadStore(storePath)
+	if err != nil {
+		return err
+	}
+	if err := SaveStore(storePath, store); err != nil {
+		return err
+	}
+	return app.ChownForSudo(storePath)
+}
+
+func flattenStoreFile(file storeFile) Store {
+	store := Store{Version: 1}
+	for relPath, key := range file.Keys {
+		store.Keys = append(store.Keys, Entry{
+			Account:     file.Account,
+			DataDir:     file.DataDir,
+			DBRelPath:   relPath,
+			Key:         strings.ToLower(key.Key),
+			Salt:        strings.ToLower(key.Salt),
+			Fingerprint: key.Fingerprint,
+			UpdatedAt:   key.UpdatedAt,
+		})
+	}
+	return store
+}
+
+func groupStoreFile(store Store) storeFile {
+	file := storeFile{
+		Version: 1,
+		Keys:    map[string]dbKeyStore{},
+	}
+	if len(store.Keys) > 0 {
+		file.Account = store.Keys[0].Account
+		file.DataDir = store.Keys[0].DataDir
+	}
+	for _, entry := range store.Keys {
+		file.Keys[entry.DBRelPath] = dbKeyStore{
+			Key:         strings.ToLower(entry.Key),
+			Salt:        strings.ToLower(entry.Salt),
+			Fingerprint: entry.Fingerprint,
+			UpdatedAt:   entry.UpdatedAt,
+		}
+	}
+	return file
 }
 
 func (s Store) Find(dataDir string, dbRelPath string, salt string) (Entry, bool) {

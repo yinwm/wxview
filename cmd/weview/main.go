@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -20,6 +21,8 @@ import (
 	"weview/internal/contacts"
 	"weview/internal/daemon"
 	"weview/internal/key"
+	"weview/internal/media"
+	"weview/internal/messages"
 )
 
 func main() {
@@ -43,6 +46,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runDaemon(args[1:], stdout)
 	case "contact", "contacts":
 		return runContacts(ctx, args[1:], stdout)
+	case "messages":
+		return runMessages(ctx, args[1:], stdout)
 	case "contract":
 		if len(args) > 1 && hasHelp(args[1:]) {
 			contactsUsage(stdout)
@@ -67,15 +72,16 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, `weview - Read local WeChat data
 
 Weview is a local-first CLI for reading macOS WeChat 4.x data from the
-user's own machine. V1 focuses on contact/contact.db: it can obtain the
-database key, decrypt the contact database into ~/.weview/cache, run a local
-daemon for near-real-time refresh, and list contacts or contact-table groups.
+user's own machine. It can obtain database keys, decrypt local WeChat
+databases into ~/.weview/cache, list contacts or contact-table groups, and
+query message history for an explicit username.
 
 Commands:
-  weview init       First-time setup: detect WeChat, get the contact DB key,
-                    and save it locally. Usually run once at the beginning.
+  weview init       First-time setup: detect WeChat, get supported DB keys,
+                    and save them locally. Usually run once at the beginning.
   weview daemon     Show daemon help.
   weview contacts   List contacts from the decrypted contact cache.
+  weview messages   List messages for an explicit username.
   weview help CMD   Show detailed help for a command.
 
 Common examples:
@@ -86,6 +92,8 @@ Common examples:
   weview contacts --kind friend --query AI --limit 20 --format json
   weview contacts --kind chatroom --format table
   weview contacts --refresh --format json
+  weview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
+  weview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
   weview daemon start
   weview daemon status
 
@@ -96,13 +104,16 @@ Machine-readable usage:
   Use --kind friend for ordinary private-chat contacts.
   Use --kind chatroom for groups present in the contact table.
 
-Current V1 scope:
-  Supported: macOS WeChat 4.x contact/contact.db.
-  Not included yet: message DBs, media/image decoding, WAL patching, public Web API.
+Current scope:
+  Supported: macOS WeChat 4.x contact/contact.db and message/message_*.db
+             history reads by explicit username, including local image path
+             resolution when image files are available.
+  Not included yet: WAL patching, public Web API.
 
 Run:
   weview init --help
   weview contacts --help
+  weview messages --help
   weview daemon --help`)
 }
 
@@ -114,6 +125,8 @@ func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
 		daemonUsage(stdout)
 	case "contact", "contacts":
 		contactsUsage(stdout)
+	case "messages":
+		messagesUsage(stdout)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command: %s", command)
@@ -125,8 +138,8 @@ func initUsage(w io.Writer) {
 	fmt.Fprintln(w, `weview init - First-time setup for reading local WeChat data
 
 Usage:
-  sudo weview init
-  sudo go run ./cmd/weview init
+  sudo weview init [--verbose]
+  sudo go run ./cmd/weview init [--verbose]
 
 When to run:
   Run this at the beginning before using contacts/daemon.
@@ -137,21 +150,34 @@ When to run:
 What it does:
   1. Detects the current macOS WeChat 4.x account under:
      ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<account>/db_storage
-  2. Reads contact/contact.db page 1 salt.
-  3. Reuses an existing valid key from ~/.weview/keys.json, or scans the running
-     WeChat process memory for the SQLCipher raw key.
-  4. Verifies the key with page 1 HMAC.
-  5. Saves metadata and the key in ~/.weview/keys.json with mode 0600.
+  2. Finds required databases:
+     contact/contact.db
+     message/message_[number].db
+     and best-effort auxiliary message databases:
+     message/message_fts.db, message/message_resource.db, message/message_revoke.db
+  3. Reads each discovered DB page 1 salt.
+  4. Reuses existing valid keys from ~/.weview/cache/<account>/keys.json, or
+     scans the running WeChat process memory for missing SQLCipher raw keys.
+  5. Verifies each key with page 1 HMAC.
+  6. Saves version 1 account metadata and keys in
+     ~/.weview/cache/<account>/keys.json with mode 0600.
+
+Required DB key failures stop init. Auxiliary message DB failures are reported
+as warnings and can be retried later with sudo weview init.
 
 Output fields:
   account       WeChat account directory name.
   data_dir      Source db_storage directory.
-  db_rel_path   contact/contact.db in V1.
-  salt          DB salt from page 1.
-  fingerprint   Short key fingerprint. The full key is never printed.
-  status        reused or scanned. reused means the saved key is still valid.
+  keys_total    Number of DB keys prepared.
+  keys_scanned  Number of keys found in this run.
+  keys_reused   Number of saved keys reused.
+  warnings      Optional DBs that could not be prepared in this run.
+
+Flags:
+  --verbose     Also print each DB path, short key fingerprint, and status.
 
 Notes:
+  The full key is never printed, even with --verbose.
   Key scanning needs WeChat running and macOS permission to read its process
   memory. On Hardened Runtime WeChat builds, sudo alone may not be enough; use a
   local GUI terminal with Developer Tools permission or ad-hoc re-sign WeChat.`)
@@ -184,17 +210,23 @@ Flags:
   No daemon flags are currently supported except -h/--help/help.
 
 What it does:
-  1. Ensures the contact DB key exists.
+  1. Uses keys prepared by weview init.
   2. Decrypts contact/contact.db into:
      ~/.weview/cache/<account>/contact/contact.db
-  3. Opens an internal Unix socket:
+  3. Decrypts supported message DBs into:
+     ~/.weview/cache/<account>/message/
+  4. Opens an internal Unix socket:
      ~/.weview/weview.sock
-  4. Watches the main contact/contact.db file and refreshes the cache after a
-     debounce delay when it changes.
+  5. Watches contact and supported message DB files and refreshes affected
+     caches after a debounce delay when they change.
+     The current account is resolved from DB files opened by WeChat, so account
+     switches while the daemon is running move to the new account cache.
+     Unchanged DBs are skipped using ~/.weview/cache/<account>/mtime.json.
 
 Internal daemon actions:
   health
   refresh_contacts
+  refresh_messages
   stop
 
 Notes:
@@ -277,6 +309,75 @@ Runtime behavior:
   the cache first; otherwise it refreshes the cache in this process.`)
 }
 
+func messagesUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview messages - List WeChat messages for one username
+
+Usage:
+  weview messages --username USERNAME --format table|json|jsonl|csv [flags]
+  weview messages --help
+
+Required:
+  --username TEXT  Exact WeChat username, e.g. wxid_* or *@chatroom.
+
+Flags:
+  --format table   Human-readable table output.
+  --format json    Machine-readable JSON array.
+  --format jsonl   Machine-readable newline-delimited JSON, one message per line.
+  --format csv     Machine-readable CSV with header row.
+
+  --start TIME     Inclusive start time. Supports Unix seconds, YYYY-MM-DD,
+                   YYYY-MM-DD HH:MM, YYYY-MM-DD HH:MM:SS, or RFC3339.
+  --end TIME       Inclusive end time. Date-only values include the full day.
+  --after-seq N    Return rows with seq greater than N. Use this for cursor-style
+                   "next page after this message" reads.
+  --limit N        Return at most N rows after global time sorting. 0 means no limit.
+  --offset N       Skip N rows after global time sorting.
+  --source         Include source DB/table/local row metadata for debugging.
+  --refresh        Decrypt message text shards and supported message-related
+                   DBs into the local cache before querying. Without --refresh,
+                   uses the existing complete cache when available; otherwise
+                   refreshes in this process.
+
+Output fields:
+  id                Stable local message id for this cache row.
+  chat_username     Conversation username requested by --username.
+  from_username     Actual sender username when known. "self" is only used as a
+                    fallback when WeChat does not expose the local username.
+  direction         out, in, or unknown.
+  is_self           Whether this row is from the local user.
+  is_chatroom       Whether chat_username is a group chat.
+  seq               WeChat sort sequence; pass it to --after-seq for cursor reads.
+  server_id         WeChat server message id when present.
+  create_time       Unix timestamp from WeChat.
+  time              Local formatted time.
+  type              Lower 32 bits of WeChat local_type.
+  sub_type          Upper 32 bits of WeChat local_type.
+  content           Raw decoded message content. XML stays XML.
+  content_detail    Parsed convenience fields such as type, text, title, url,
+                    image metadata, and local image path/width/height when
+                    available.
+  content_encoding  text, zstd, zstd_error, or invalid_hex.
+
+Source fields:
+  Only shown when --source is passed. They are useful for debugging cache/shard
+  behavior, but are not needed for normal chat-history reads.
+
+Examples:
+  weview messages --username wxid_xxx --format table
+  weview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
+  weview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
+  weview messages --username 123@chatroom --limit 100 --offset 0 --format jsonl
+  weview messages --username wxid_xxx --source --refresh --format json
+
+Runtime behavior:
+  This command reads message rows from local decrypted message caches and merges
+  all message/message_*.db shards before applying pagination. Results are sorted
+  by create_time ascending, then seq, source local id, and source shard.
+  Image messages in the returned page are resolved to local files automatically.
+  WeChat .dat images are decoded into ~/.weview/cache/<account>/media/.
+  If a required message DB key is missing, run sudo weview init first.`)
+}
+
 func hasHelp(args []string) bool {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" || arg == "help" {
@@ -293,23 +394,56 @@ func runInit(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	verbose := fs.Bool("verbose", false, "print per-database key fingerprints and statuses")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	res, err := key.EnsureContactKey(ctx)
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected init argument: %s", fs.Arg(0))
+	}
+	ensureResult, err := key.EnsureSupportedKeys(ctx)
 	if err != nil {
 		return err
 	}
-	status := "scanned"
-	if res.Reused {
-		status = "reused"
+	results := ensureResult.Keys
+	if len(results) == 0 {
+		return fmt.Errorf("no supported database found")
 	}
-	fmt.Fprintf(stdout, "account: %s\n", res.Target.Account)
-	fmt.Fprintf(stdout, "data_dir: %s\n", res.Target.DataDir)
-	fmt.Fprintf(stdout, "db_rel_path: %s\n", res.Target.DBRelPath)
-	fmt.Fprintf(stdout, "salt: %s\n", res.Entry.Salt)
-	fmt.Fprintf(stdout, "fingerprint: %s\n", res.Entry.Fingerprint)
-	fmt.Fprintf(stdout, "status: %s\n", status)
+	return writeInitOutput(stdout, results, ensureResult.Warnings, *verbose)
+}
+
+func writeInitOutput(stdout io.Writer, results []key.EnsureResult, warnings []key.EnsureWarning, verbose bool) error {
+	fmt.Fprintf(stdout, "account: %s\n", results[0].Target.Account)
+	fmt.Fprintf(stdout, "data_dir: %s\n", results[0].Target.DataDir)
+	fmt.Fprintf(stdout, "keys_total: %d\n", len(results))
+	scanned := 0
+	reused := 0
+	for _, res := range results {
+		if res.Reused {
+			reused++
+		} else {
+			scanned++
+		}
+	}
+	fmt.Fprintf(stdout, "keys_scanned: %d\n", scanned)
+	fmt.Fprintf(stdout, "keys_reused: %d\n", reused)
+	if verbose {
+		fmt.Fprintln(stdout, "keys:")
+		for _, res := range results {
+			status := "scanned"
+			if res.Reused {
+				status = "reused"
+			}
+			fmt.Fprintf(stdout, "  %s fingerprint=%s status=%s\n", res.Target.DBRelPath, res.Entry.Fingerprint, status)
+		}
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintf(stdout, "warnings_total: %d\n", len(warnings))
+		fmt.Fprintln(stdout, "warnings:")
+		for _, warning := range warnings {
+			fmt.Fprintf(stdout, "  %s %s\n", warning.DBRelPath, warning.Message)
+		}
+	}
 	return nil
 }
 
@@ -342,7 +476,7 @@ func runDaemonForeground(stdout io.Writer) error {
 	defer stop()
 
 	fmt.Fprintf(stdout, "daemon socket: %s\n", socketPath)
-	fmt.Fprintln(stdout, "initializing contact cache...")
+	fmt.Fprintln(stdout, "initializing local caches...")
 	server := &daemon.Server{SocketPath: socketPath, Shutdown: stop}
 	if err := server.Run(ctx); err != nil {
 		return err
@@ -566,6 +700,85 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 	return writeContacts(stdout, list, *format)
 }
 
+func runMessages(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		messagesUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("messages", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	username := fs.String("username", "", "exact WeChat username")
+	startText := fs.String("start", "", "inclusive start time")
+	endText := fs.String("end", "", "inclusive end time")
+	afterSeq := fs.Int64("after-seq", 0, "return rows with seq greater than this value")
+	limit := fs.Int("limit", 0, "maximum rows to return after sorting; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip after sorting")
+	includeSource := fs.Bool("source", false, "include source DB/table/local row metadata")
+	refresh := fs.Bool("refresh", false, "refresh decrypted message caches before listing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if strings.TrimSpace(*username) == "" {
+		return fmt.Errorf("--username is required")
+	}
+	if *limit < 0 {
+		return fmt.Errorf("invalid limit %d: must be >= 0", *limit)
+	}
+	if *offset < 0 {
+		return fmt.Errorf("invalid offset %d: must be >= 0", *offset)
+	}
+	if *afterSeq < 0 {
+		return fmt.Errorf("invalid after-seq %d: must be >= 0", *afterSeq)
+	}
+	start, hasStart, err := parseTimeBound(*startText, "start", false)
+	if err != nil {
+		return err
+	}
+	end, hasEnd, err := parseTimeBound(*endText, "end", true)
+	if err != nil {
+		return err
+	}
+	if hasStart && hasEnd && start > end {
+		return fmt.Errorf("start must not be later than end")
+	}
+
+	cachePaths, err := messageCachePaths(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	usernameValue := strings.TrimSpace(*username)
+	target, err := key.DiscoverContactDB()
+	if err != nil {
+		return err
+	}
+	cacheDir, err := media.MediaCacheDir(target.Account)
+	if err != nil {
+		return err
+	}
+	resolver := media.NewResolver(target.DataDir, cacheDir)
+	list, err := messages.NewService(cachePaths).List(ctx, messages.QueryOptions{
+		Username:      usernameValue,
+		Start:         start,
+		End:           end,
+		AfterSeq:      *afterSeq,
+		HasStart:      hasStart,
+		HasEnd:        hasEnd,
+		HasAfterSeq:   *afterSeq > 0,
+		IncludeSource: *includeSource,
+		MediaResolver: &resolver,
+		Limit:         *limit,
+		Offset:        *offset,
+	})
+	if err != nil {
+		return err
+	}
+	return writeMessages(stdout, list, *format, *includeSource)
+}
+
 func listContacts(ctx context.Context, refresh bool) ([]contacts.Contact, error) {
 	cachePath, err := contactCachePath(ctx, refresh)
 	if err != nil {
@@ -612,6 +825,92 @@ func refreshContactCache(ctx context.Context) error {
 	return err
 }
 
+func messageCachePaths(ctx context.Context, refresh bool) ([]string, error) {
+	if refresh {
+		if err := refreshMessageCaches(ctx); err != nil {
+			return nil, err
+		}
+		paths, allExist, err := key.MessageCachePaths()
+		if err != nil {
+			return nil, err
+		}
+		if allExist {
+			return paths, nil
+		}
+		return nil, fmt.Errorf("message cache was not found after refresh")
+	}
+	paths, allExist, err := key.MessageCachePaths()
+	if err != nil {
+		return nil, err
+	}
+	if allExist {
+		return paths, nil
+	}
+	return key.EnsureMessageCaches(ctx)
+}
+
+func refreshMessageCaches(ctx context.Context) error {
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: time.Minute}
+	if client.Healthy(ctx) {
+		_, err := client.Call(ctx, daemon.ActionRefreshMessages)
+		return err
+	}
+	_, err = key.EnsureMessageCaches(ctx)
+	return err
+}
+
+func parseTimeBound(value string, field string, isEnd bool) (int64, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false, nil
+	}
+	if allDigits(value) {
+		ts, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, false, fmt.Errorf("invalid %s time %q", field, value)
+		}
+		return ts, true, nil
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t.Unix(), true, nil
+	}
+	layouts := []struct {
+		layout   string
+		dateOnly bool
+	}{
+		{"2006-01-02 15:04:05", false},
+		{"2006-01-02 15:04", false},
+		{"2006-01-02", true},
+	}
+	for _, item := range layouts {
+		t, err := time.ParseInLocation(item.layout, value, time.Local)
+		if err != nil {
+			continue
+		}
+		if item.dateOnly && isEnd {
+			t = t.Add(24*time.Hour - time.Second)
+		}
+		return t.Unix(), true, nil
+	}
+	return 0, false, fmt.Errorf("invalid %s time %q: use Unix seconds, YYYY-MM-DD, YYYY-MM-DD HH:MM, YYYY-MM-DD HH:MM:SS, or RFC3339", field, value)
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func validFormat(format string) bool {
 	switch format {
 	case "table", "json", "jsonl", "csv":
@@ -640,15 +939,17 @@ func validSort(sortBy string) bool {
 }
 
 var defaultContactFields = []string{"username", "alias", "remark", "nick_name", "head_url", "kind"}
+var defaultMessageFields = []string{"id", "chat_username", "from_username", "direction", "is_self", "is_chatroom", "seq", "server_id", "create_time", "time", "type", "sub_type", "content", "content_detail", "content_encoding"}
+var sourceMessageFields = []string{"source_db", "source_table", "source_local_id", "source_raw_type", "source_status", "source_real_sender_id"}
 
 func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 	switch format {
 	case "json":
-		enc := json.NewEncoder(w)
+		enc := jsonEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(list)
 	case "jsonl":
-		enc := json.NewEncoder(w)
+		enc := jsonEncoder(w)
 		for _, contact := range list {
 			if err := enc.Encode(contact); err != nil {
 				return err
@@ -683,10 +984,61 @@ func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 	}
 }
 
+func writeMessages(w io.Writer, list []messages.Message, format string, includeSource bool) error {
+	fields := messageFields(includeSource)
+	switch format {
+	case "json":
+		enc := jsonEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(list)
+	case "jsonl":
+		enc := jsonEncoder(w)
+		for _, message := range list {
+			if err := enc.Encode(message); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "csv":
+		cw := csv.NewWriter(w)
+		if err := cw.Write(fields); err != nil {
+			return err
+		}
+		for _, message := range list {
+			if err := cw.Write(messageValues(message, fields)); err != nil {
+				return err
+			}
+		}
+		cw.Flush()
+		return cw.Error()
+	case "table":
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, strings.ToUpper(strings.Join(fields, "\t")))
+		for _, message := range list {
+			values := messageValues(message, fields)
+			for i := range values {
+				values[i] = cleanCell(values[i])
+			}
+			fmt.Fprintln(tw, strings.Join(values, "\t"))
+		}
+		return tw.Flush()
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func messageFields(includeSource bool) []string {
+	fields := append([]string{}, defaultMessageFields...)
+	if includeSource {
+		fields = append(fields, sourceMessageFields...)
+	}
+	return fields
+}
+
 func writeCount(w io.Writer, count int, format string) error {
 	switch format {
 	case "json", "jsonl":
-		return json.NewEncoder(w).Encode(map[string]int{"count": count})
+		return jsonEncoder(w).Encode(map[string]int{"count": count})
 	case "csv":
 		cw := csv.NewWriter(w)
 		if err := cw.Write([]string{"count"}); err != nil {
@@ -730,6 +1082,81 @@ func contactValue(contact contacts.Contact, field string) string {
 	default:
 		return ""
 	}
+}
+
+func messageValues(message messages.Message, fields []string) []string {
+	values := make([]string, 0, len(fields))
+	for _, field := range fields {
+		values = append(values, messageValue(message, field))
+	}
+	return values
+}
+
+func messageValue(message messages.Message, field string) string {
+	switch field {
+	case "id":
+		return message.ID
+	case "chat_username":
+		return message.ChatUsername
+	case "from_username":
+		return message.FromUsername
+	case "direction":
+		return message.Direction
+	case "is_self":
+		return strconv.FormatBool(message.IsSelf)
+	case "is_chatroom":
+		return strconv.FormatBool(message.IsChatroom)
+	case "seq":
+		return fmt.Sprintf("%d", message.Seq)
+	case "server_id":
+		return fmt.Sprintf("%d", message.ServerID)
+	case "create_time":
+		return fmt.Sprintf("%d", message.CreateTime)
+	case "time":
+		return message.Time
+	case "type":
+		return fmt.Sprintf("%d", message.Type)
+	case "sub_type":
+		return fmt.Sprintf("%d", message.SubType)
+	case "content":
+		return message.Content
+	case "content_detail":
+		if message.ContentDetail == nil {
+			return ""
+		}
+		if text := message.ContentDetail["text"]; text != "" {
+			return text
+		}
+		return message.ContentDetail["type"]
+	case "content_encoding":
+		return message.ContentEncoding
+	case "source_db":
+		if message.Source != nil {
+			return message.Source.DB
+		}
+		return message.SourceDB
+	case "source_table":
+		if message.Source != nil {
+			return message.Source.Table
+		}
+		return message.TableName
+	case "source_local_id":
+		return fmt.Sprintf("%d", message.LocalID)
+	case "source_raw_type":
+		return fmt.Sprintf("%d", message.RawType)
+	case "source_status":
+		return fmt.Sprintf("%d", message.Status)
+	case "source_real_sender_id":
+		return fmt.Sprintf("%d", message.RealSenderID)
+	default:
+		return ""
+	}
+}
+
+func jsonEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
 }
 
 func cleanCell(s string) string {

@@ -46,6 +46,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	go s.watchContacts(ctx)
+	go s.watchMessages(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -82,6 +83,16 @@ func (s *Server) prepareSocket(ctx context.Context) error {
 }
 
 func (s *Server) refresh(ctx context.Context) error {
+	if err := s.refreshContact(ctx); err != nil {
+		return err
+	}
+	if err := s.refreshMessages(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) refreshContact(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, _, err := key.EnsureContactCache(ctx)
@@ -92,19 +103,48 @@ func (s *Server) refresh(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) refreshMessages(ctx context.Context) error {
+	_, err := key.EnsureMessageRelatedCaches(ctx)
+	return err
+}
+
 func (s *Server) watchContacts(ctx context.Context) {
-	s.mu.Lock()
-	path := s.target.DBPath
-	s.mu.Unlock()
-	if path == "" {
-		return
+	paths := func() []string {
+		target, err := key.DiscoverContactDB()
+		if err != nil {
+			log.Printf("discover contact database failed: %v", err)
+			return nil
+		}
+		return []string{target.DBPath}
 	}
-	WatchFile(ctx, path, time.Second, time.Second, func() {
-		if err := s.refresh(ctx); err != nil {
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshContact(ctx); err != nil {
 			log.Printf("refresh contact cache failed: %v", err)
 			return
 		}
 		log.Printf("contact cache refreshed")
+	})
+}
+
+func (s *Server) watchMessages(ctx context.Context) {
+	paths := func() []string {
+		targets, err := key.DiscoverMessageRelatedDBs()
+		if err != nil {
+			log.Printf("discover message databases failed: %v", err)
+			return nil
+		}
+		out := make([]string, 0, len(targets))
+		for _, target := range targets {
+			out = append(out, target.DBPath)
+		}
+		return out
+	}
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshMessages(ctx); err != nil {
+			log.Printf("refresh message caches failed: %v", err)
+			return
+		}
+		log.Printf("message caches refreshed")
 	})
 }
 
@@ -119,7 +159,13 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	case ActionHealth:
 		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "ok"})
 	case ActionRefreshContacts:
-		if err := s.refresh(ctx); err != nil {
+		if err := s.refreshContact(ctx); err != nil {
+			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionRefreshMessages:
+		if err := s.refreshMessages(ctx); err != nil {
 			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
 			return
 		}

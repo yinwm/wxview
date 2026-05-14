@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"weview/internal/contacts"
+	"weview/internal/messages"
 )
 
 func TestWriteContactsJSON(t *testing.T) {
@@ -84,6 +85,73 @@ func TestWriteContactsJSONL(t *testing.T) {
 	}
 }
 
+func TestWriteMessagesJSONL(t *testing.T) {
+	list := []messages.Message{
+		{ID: "wechat:msg:message_0.db:Msg_x:1", ChatUsername: "alice", FromUsername: "self", Direction: "out", IsSelf: true, Seq: 1001, CreateTime: 1700000000, Time: "2023-11-14 22:13:20", Type: 1, Content: "hello <tag> & link", ContentDetail: map[string]string{"type": "text", "text": "hello <tag> & link"}, ContentEncoding: "text", LocalID: 1, RawType: 1, Status: 2, SourceDB: "message_0.db", TableName: "Msg_x"},
+		{ID: "wechat:msg:message_1.db:Msg_x:2", ChatUsername: "alice", FromUsername: "alice", Direction: "in", Seq: 1002, CreateTime: 1700000001, Time: "2023-11-14 22:13:21", Type: 1, Content: "world", ContentDetail: map[string]string{"type": "text", "text": "world"}, ContentEncoding: "text", LocalID: 2, RawType: 1, Status: 4, SourceDB: "message_1.db", TableName: "Msg_x"},
+	}
+	var out bytes.Buffer
+	if err := writeMessages(&out, list, "jsonl", false); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d jsonl lines, want 2: %q", len(lines), out.String())
+	}
+	var got messages.Message
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatalf("invalid jsonl line %q: %v", lines[0], err)
+	}
+	if got.Content != "hello <tag> & link" || got.ChatUsername != "alice" || got.FromUsername != "self" {
+		t.Fatalf("unexpected message jsonl: %+v", got)
+	}
+	if strings.Contains(lines[0], `\u003c`) || strings.Contains(lines[0], `\u0026`) {
+		t.Fatalf("message jsonl should not HTML-escape content: %s", lines[0])
+	}
+	if strings.Contains(lines[0], `"source"`) {
+		t.Fatalf("source should be omitted by default: %s", lines[0])
+	}
+}
+
+func TestWriteMessagesCSV(t *testing.T) {
+	list := []messages.Message{{
+		ID:              "wechat:msg:message_0.db:Msg_x:1",
+		ChatUsername:    "alice",
+		FromUsername:    "self",
+		Direction:       "out",
+		IsSelf:          true,
+		Seq:             1001,
+		CreateTime:      1700000000,
+		Time:            "2023-11-14 22:13:20",
+		Type:            1,
+		LocalID:         1,
+		RawType:         1,
+		Status:          2,
+		Content:         "hello, \"quoted\"\nline",
+		ContentDetail:   map[string]string{"type": "text", "text": "hello, \"quoted\"\nline"},
+		ContentEncoding: "text",
+		SourceDB:        "message_0.db",
+		TableName:       "Msg_x",
+	}}
+	var out bytes.Buffer
+	if err := writeMessages(&out, list, "csv", true); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(strings.NewReader(out.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d csv rows, want 2: %q", len(rows), out.String())
+	}
+	if rows[0][0] != "id" || rows[0][12] != "content" || rows[0][13] != "content_detail" || rows[0][15] != "source_db" {
+		t.Fatalf("unexpected message csv header: %#v", rows[0])
+	}
+	if rows[1][12] != "hello, \"quoted\"\nline" || rows[1][13] != "hello, \"quoted\"\nline" || rows[1][15] != "message_0.db" {
+		t.Fatalf("message content was not round-tripped correctly: %#v", rows[1])
+	}
+}
+
 func TestWriteCount(t *testing.T) {
 	var out bytes.Buffer
 	if err := writeCount(&out, 12, "json"); err != nil {
@@ -111,5 +179,22 @@ func TestWriteCount(t *testing.T) {
 	}
 	if out.String() != "12\n" {
 		t.Fatalf("unexpected table count: %q", out.String())
+	}
+}
+
+func TestParseTimeBoundDateEndIncludesFullDay(t *testing.T) {
+	start, hasStart, err := parseTimeBound("2026-05-14", "start", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, hasEnd, err := parseTimeBound("2026-05-14", "end", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasStart || !hasEnd {
+		t.Fatal("expected parsed bounds")
+	}
+	if end-start != 24*60*60-1 {
+		t.Fatalf("date-only end should include full day; start=%d end=%d", start, end)
 	}
 }

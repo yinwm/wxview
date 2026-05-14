@@ -11,6 +11,10 @@ import (
 )
 
 func ScanContactKey(ctx context.Context, saltHex string, page1 []byte) (string, error) {
+	return ScanDBKey(ctx, saltHex, page1, "contact/contact.db")
+}
+
+func ScanDBKey(ctx context.Context, saltHex string, page1 []byte, label string) (string, error) {
 	pids, err := wechatPIDs(ctx)
 	if err != nil {
 		return "", err
@@ -36,7 +40,7 @@ func ScanContactKey(ctx context.Context, saltHex string, page1 []byte) (string, 
 	if lastErr != nil {
 		return "", fmt.Errorf("%w. Key scan needs WeChat running and macOS permission to read its process memory.%s", lastErr, wechatPermissionHint(ctx))
 	}
-	return "", fmt.Errorf("no SQLCipher key found for contact.db salt %s. Key scan needs WeChat running and macOS permission to read its process memory.%s", saltHex, wechatPermissionHint(ctx))
+	return "", fmt.Errorf("no SQLCipher key found for %s salt %s. Key scan needs WeChat running and macOS permission to read its process memory.%s", label, saltHex, wechatPermissionHint(ctx))
 }
 
 func wechatPIDs(ctx context.Context) ([]int, error) {
