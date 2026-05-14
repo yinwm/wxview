@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -73,7 +74,7 @@ daemon for near-real-time refresh, and list contacts or contact-table groups.
 Commands:
   weview init       First-time setup: detect WeChat, get the contact DB key,
                     and save it locally. Usually run once at the beginning.
-  weview daemon     Start the local refresh daemon over ~/.weview/weview.sock.
+  weview daemon     Show daemon help.
   weview contacts   List contacts from the decrypted contact cache.
   weview help CMD   Show detailed help for a command.
 
@@ -85,7 +86,8 @@ Common examples:
   weview contacts --kind friend --query AI --limit 20 --format json
   weview contacts --kind chatroom --format table
   weview contacts --refresh --format json
-  weview daemon
+  weview daemon start
+  weview daemon status
 
 Machine-readable usage:
   Use --format json for a JSON array.
@@ -155,12 +157,31 @@ Notes:
   local GUI terminal with Developer Tools permission or ad-hoc re-sign WeChat.`)
 }
 
+const (
+	daemonForegroundEnv   = "WEVIEW_DAEMON_FOREGROUND"
+	daemonSupportedForms  = "`weview daemon`, `weview daemon start`, `weview daemon stop`, `weview daemon status`"
+	daemonStartWait       = 15 * time.Second
+	daemonStopWait        = 5 * time.Second
+	daemonStatusPollEvery = 100 * time.Millisecond
+)
+
 func daemonUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview daemon - Run the local WeChat data refresh daemon
+	fmt.Fprintln(w, `weview daemon - Manage the local WeChat contact cache daemon
 
 Usage:
   weview daemon
-  go run ./cmd/weview daemon
+  weview daemon start
+  weview daemon stop
+  weview daemon status
+
+Supported forms:
+  weview daemon         Show this help.
+  weview daemon start   Start the daemon in the background.
+  weview daemon stop    Stop the background daemon.
+  weview daemon status  Check whether ~/.weview/weview.sock responds to health.
+
+Flags:
+  No daemon flags are currently supported except -h/--help/help.
 
 What it does:
   1. Ensures the contact DB key exists.
@@ -174,12 +195,13 @@ What it does:
 Internal daemon actions:
   health
   refresh_contacts
+  stop
 
 Notes:
   This is an internal local transport, not a public Web API.
+  daemon start writes daemon logs to ~/.weview/weview.log.
   V1 does not patch or stream .db-wal, so refresh is near-real-time after WeChat
-  checkpoints/writes the main DB.
-  Stop with Ctrl-C.`)
+  checkpoints/writes the main DB.`)
 }
 
 func contactsUsage(w io.Writer) {
@@ -292,15 +314,26 @@ func runInit(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func runDaemon(args []string, stdout io.Writer) error {
-	if hasHelp(args) {
+	if os.Getenv(daemonForegroundEnv) == "1" && len(args) == 0 {
+		return runDaemonForeground(stdout)
+	}
+	if len(args) == 0 || hasHelp(args) {
 		daemonUsage(stdout)
 		return nil
 	}
-	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
-		return err
+	switch args[0] {
+	case "start":
+		return runDaemonStart(args[1:], stdout)
+	case "stop":
+		return runDaemonStop(args[1:], stdout)
+	case "status":
+		return runDaemonStatus(args[1:], stdout)
+	default:
+		return fmt.Errorf("unknown daemon command: %s; supported forms are %s", args[0], daemonSupportedForms)
 	}
+}
+
+func runDaemonForeground(stdout io.Writer) error {
 	socketPath, err := app.SocketPath()
 	if err != nil {
 		return err
@@ -310,11 +343,170 @@ func runDaemon(args []string, stdout io.Writer) error {
 
 	fmt.Fprintf(stdout, "daemon socket: %s\n", socketPath)
 	fmt.Fprintln(stdout, "initializing contact cache...")
-	server := &daemon.Server{SocketPath: socketPath}
+	server := &daemon.Server{SocketPath: socketPath, Shutdown: stop}
 	if err := server.Run(ctx); err != nil {
 		return err
 	}
 	return nil
+}
+
+func runDaemonStart(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("daemon start", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected daemon start argument: %s", fs.Arg(0))
+	}
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: 500 * time.Millisecond}
+	fmt.Fprintf(stdout, "daemon socket: %s\n", socketPath)
+	if client.Healthy(context.Background()) {
+		fmt.Fprintln(stdout, "status: already running")
+		return nil
+	}
+
+	logPath, err := app.LogPath()
+	if err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	if err := app.ChownForSudo(logPath); err != nil {
+		return err
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "daemon")
+	cmd.Env = append(os.Environ(), daemonForegroundEnv+"=1")
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "log: %s\n", logPath)
+	fmt.Fprintf(stdout, "pid: %d\n", cmd.Process.Pid)
+
+	exitCh := make(chan error, 1)
+	go func() {
+		exitCh <- cmd.Wait()
+	}()
+	if ok, err := waitForDaemonHealthy(context.Background(), client, daemonStartWait, exitCh); err != nil {
+		return err
+	} else if ok {
+		fmt.Fprintln(stdout, "status: running")
+		return nil
+	}
+	fmt.Fprintln(stdout, "status: starting")
+	fmt.Fprintln(stdout, "note: daemon has not responded to health yet; check status or the log file.")
+	return nil
+}
+
+func runDaemonStop(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("daemon stop", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected daemon stop argument: %s", fs.Arg(0))
+	}
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: 500 * time.Millisecond}
+	fmt.Fprintf(stdout, "daemon socket: %s\n", socketPath)
+	if !client.Healthy(context.Background()) {
+		fmt.Fprintln(stdout, "status: stopped")
+		return nil
+	}
+	if _, err := client.Call(context.Background(), daemon.ActionStop); err != nil {
+		return err
+	}
+	if waitForDaemonStopped(context.Background(), client, daemonStopWait) {
+		fmt.Fprintln(stdout, "status: stopped")
+		return nil
+	}
+	fmt.Fprintln(stdout, "status: stopping")
+	return nil
+}
+
+func runDaemonStatus(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("daemon status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected daemon status argument: %s", fs.Arg(0))
+	}
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: 500 * time.Millisecond}
+	fmt.Fprintf(stdout, "daemon socket: %s\n", socketPath)
+	if client.Healthy(context.Background()) {
+		fmt.Fprintln(stdout, "status: running")
+		return nil
+	}
+	fmt.Fprintln(stdout, "status: stopped")
+	return nil
+}
+
+func waitForDaemonHealthy(ctx context.Context, client daemon.Client, timeout time.Duration, exitCh <-chan error) (bool, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(daemonStatusPollEvery)
+	defer ticker.Stop()
+	for {
+		if client.Healthy(ctx) {
+			return true, nil
+		}
+		select {
+		case err := <-exitCh:
+			if err != nil {
+				return false, fmt.Errorf("daemon exited before becoming healthy: %w", err)
+			}
+			return false, fmt.Errorf("daemon exited before becoming healthy")
+		case <-deadline.C:
+			return false, nil
+		case <-ticker.C:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+}
+
+func waitForDaemonStopped(ctx context.Context, client daemon.Client, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(daemonStatusPollEvery)
+	defer ticker.Stop()
+	for {
+		if !client.Healthy(ctx) {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 func runContacts(ctx context.Context, args []string, stdout io.Writer) error {

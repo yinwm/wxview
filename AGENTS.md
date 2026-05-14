@@ -61,7 +61,10 @@ product goal.
   checkpoints the main DB.
 - In V1, the daemon is a cache maintenance service, not a contacts query
   service. It should focus on key/cache setup, refresh, source DB watching,
-  `health`, and `refresh_contacts`.
+  `health`, `refresh_contacts`, and `stop`.
+- The only supported daemon CLI forms are `weview daemon`, `weview daemon start`,
+  `weview daemon stop`, and `weview daemon status`. Bare `weview daemon` must
+  show the same help as `weview daemon --help` and must not start the daemon.
 - `weview contacts ...` should always read contacts directly from the local
   decrypted cache, then apply filtering, sorting, pagination, counts, and output
   formatting in the CLI path.

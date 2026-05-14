@@ -21,7 +21,8 @@ V1 先从 macOS 微信 4.x 的联系人数据开始：自动获取 `contact/cont
 - 自动获取并验证 `contact/contact.db` 的 SQLCipher raw key。
 - 解密主数据库 `contact/contact.db` 到本地缓存：
   `~/.weview/cache/<account>/contact/contact.db`
-- 启动本地 daemon，通过 `~/.weview/weview.sock` 触发刷新，本地缓存做准实时维护。
+- 运行本地 daemon，前台常驻维护联系人缓存；`~/.weview/weview.sock`
+  只作为内部控制通道。
 - 通过 CLI 查询联系人、普通私聊联系人、群和其他联系人表记录。
 - 支持 `table`、`json`、`jsonl`、`csv` 输出。
 - 支持搜索、精确 username 查询、分页、排序和计数。
@@ -44,13 +45,34 @@ sudo go run ./cmd/weview init
 
 ### `weview daemon`
 
-启动本地刷新进程。
+管理本地联系人缓存维护进程。
 
 ```sh
 go run ./cmd/weview daemon
 ```
 
-daemon 会确保 key 可用，解密联系人数据库到缓存，然后监听主数据库变化。V1 不处理 `.db-wal`，所以这是准实时刷新：微信把变化写回主数据库后，缓存会刷新。
+当前 daemon 只支持这 4 种形式：
+
+```sh
+go run ./cmd/weview daemon          # 显示 daemon 帮助
+go run ./cmd/weview daemon start    # 后台启动 daemon
+go run ./cmd/weview daemon stop     # 停止后台 daemon
+go run ./cmd/weview daemon status   # 检查 daemon 是否正在响应 health
+```
+
+`weview daemon` 和 `weview daemon --help` 行为一样，只显示帮助，不启动进程。
+
+`weview daemon start` 会后台启动 daemon。如果 daemon 已经在运行，会给出
+`status: already running`，不会重复启动。后台 daemon 会先确保 key 可用，把
+`contact/contact.db` 解密到本地缓存，然后监听主数据库文件变化；发现变化后，
+会重新刷新缓存。daemon 日志写入 `~/.weview/weview.log`。
+
+`weview daemon stop` 会停止后台 daemon；如果 daemon 没有运行，会输出
+`status: stopped`。
+
+daemon 当前没有其他 flags；除了 `-h` / `--help` / `help` 外，多余参数都会报错。
+
+V1 不处理 `.db-wal`，所以这是准实时刷新：微信把变化写回主数据库后，缓存才会刷新。
 
 daemon 使用本地 Unix socket：
 
@@ -58,8 +80,12 @@ daemon 使用本地 Unix socket：
 ~/.weview/weview.sock
 ```
 
-这个 socket 是内部传输，不是公开 Web API。
-daemon 只负责维护缓存和响应刷新请求，不负责联系人查询。
+这个 socket 是内部控制通道，不是公开 Web API，也不是联系人查询接口。daemon
+只负责维护缓存、响应 `health` 和 `refresh_contacts` 这类内部请求，不负责
+`contacts` 查询。
+
+`weview contacts ...` 始终直接读取本地解密缓存；daemon 是否运行只影响缓存是否
+会被常驻进程自动维护。
 
 ### `weview contacts`
 

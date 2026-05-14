@@ -13,6 +13,7 @@ const (
 	ConfigDir   = ".weview"
 	KeyFileName = "keys.json"
 	SocketName  = "weview.sock"
+	LogFileName = "weview.log"
 )
 
 func HomeDir() (string, error) {
@@ -63,6 +64,14 @@ func SocketPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(base, SocketName), nil
+}
+
+func LogPath() (string, error) {
+	base, err := EnsureBaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, LogFileName), nil
 }
 
 func CacheDBPath(account string, relPath string) (string, error) {

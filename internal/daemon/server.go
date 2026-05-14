@@ -17,6 +17,7 @@ import (
 
 type Server struct {
 	SocketPath string
+	Shutdown   func()
 
 	mu     sync.Mutex
 	target key.TargetDB
@@ -123,6 +124,11 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionStop:
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "stopping"})
+		if s.Shutdown != nil {
+			go s.Shutdown()
+		}
 	default:
 		_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: "unknown daemon action: " + req.Action})
 	}

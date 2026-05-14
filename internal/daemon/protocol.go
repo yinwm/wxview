@@ -3,6 +3,7 @@ package daemon
 const (
 	ActionHealth          = "health"
 	ActionRefreshContacts = "refresh_contacts"
+	ActionStop            = "stop"
 )
 
 type Request struct {
