@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/app"
+	"wxview/internal/app"
 )
 
 const contactRelPath = "contact/contact.db"

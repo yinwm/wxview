@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	Name        = "weview"
-	ConfigDir   = ".weview"
-	SocketName  = "weview.sock"
-	LogFileName = "weview.log"
+	Name        = "wxview"
+	ConfigDir   = ".wxview"
+	SocketName  = "wxview.sock"
+	LogFileName = "wxview.log"
 )
 
 func HomeDir() (string, error) {

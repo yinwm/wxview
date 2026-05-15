@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/contacts"
-	"weview/internal/messages"
-	"weview/internal/sqlitecli"
+	"wxview/internal/contacts"
+	"wxview/internal/messages"
+	"wxview/internal/sqlitecli"
 )
 
 type Session struct {
@@ -63,7 +63,7 @@ func (s Service) List(ctx context.Context, opts QueryOptions) ([]Session, error)
 	}
 	if _, err := os.Stat(s.CacheDB); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("session cache does not exist: run `sudo weview init` and then `weview sessions --refresh`")
+			return nil, fmt.Errorf("session cache does not exist: run `sudo wxview init` and then `wxview sessions --refresh`")
 		}
 		return nil, err
 	}

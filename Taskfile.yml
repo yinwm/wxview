@@ -1,22 +1,22 @@
 version: "3"
 
 vars:
-  BIN: ./bin/weview
+  BIN: ./bin/wxview
   GOCACHE: "{{.ROOT_DIR}}/.cache/go-build"
 
 tasks:
   default:
-    desc: Build the weview binary
+    desc: Build the wxview binary
     cmds:
       - task: build
 
   build:
-    desc: Build ./bin/weview
+    desc: Build ./bin/wxview
     env:
       GOCACHE: "{{.GOCACHE}}"
     cmds:
       - mkdir -p bin
-      - go build -o "{{.BIN}}" ./cmd/weview
+      - go build -o "{{.BIN}}" ./cmd/wxview
 
   test:
     desc: Run all tests

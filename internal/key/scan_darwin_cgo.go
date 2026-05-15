@@ -9,63 +9,63 @@ package key
 #include <stdlib.h>
 #include <string.h>
 
-#define WEVIEW_HEX_PATTERN_LEN 96
-#define WEVIEW_PATTERN_LEN (WEVIEW_HEX_PATTERN_LEN + 3)
-#define WEVIEW_SCAN_CHUNK_SIZE (2 * 1024 * 1024)
+#define WXVIEW_HEX_PATTERN_LEN 96
+#define WXVIEW_PATTERN_LEN (WXVIEW_HEX_PATTERN_LEN + 3)
+#define WXVIEW_SCAN_CHUNK_SIZE (2 * 1024 * 1024)
 
-static mach_port_t weview_mach_task_self(void) {
+static mach_port_t wxview_mach_task_self(void) {
 	return mach_task_self();
 }
 
-static int weview_is_hex_char(unsigned char c) {
+static int wxview_is_hex_char(unsigned char c) {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-static void weview_lower_hex(char *s) {
+static void wxview_lower_hex(char *s) {
 	for (int i = 0; s[i] != '\0'; i++) {
 		s[i] = (char)tolower((unsigned char)s[i]);
 	}
 }
 
-static int weview_scan_sqlcipher_buffer(
+static int wxview_scan_sqlcipher_buffer(
 	unsigned char *buf,
 	mach_msg_type_number_t len,
 	const char *target_salt_hex,
 	char *key_hex_out
 ) {
-	if (len < WEVIEW_PATTERN_LEN) return 0;
+	if (len < WXVIEW_PATTERN_LEN) return 0;
 
-	for (mach_msg_type_number_t i = 0; i + WEVIEW_PATTERN_LEN <= len; i++) {
+	for (mach_msg_type_number_t i = 0; i + WXVIEW_PATTERN_LEN <= len; i++) {
 		if (buf[i] != 'x' || buf[i + 1] != '\'') continue;
 
 		int valid = 1;
-		for (int j = 0; j < WEVIEW_HEX_PATTERN_LEN; j++) {
-			if (!weview_is_hex_char(buf[i + 2 + j])) {
+		for (int j = 0; j < WXVIEW_HEX_PATTERN_LEN; j++) {
+			if (!wxview_is_hex_char(buf[i + 2 + j])) {
 				valid = 0;
 				break;
 			}
 		}
 		if (!valid) continue;
-		if (buf[i + 2 + WEVIEW_HEX_PATTERN_LEN] != '\'') continue;
+		if (buf[i + 2 + WXVIEW_HEX_PATTERN_LEN] != '\'') continue;
 
 		char salt_hex[33];
 		memcpy(salt_hex, buf + i + 2 + 64, 32);
 		salt_hex[32] = '\0';
-		weview_lower_hex(salt_hex);
+		wxview_lower_hex(salt_hex);
 		if (strcmp(salt_hex, target_salt_hex) != 0) continue;
 
 		memcpy(key_hex_out, buf + i + 2, 64);
 		key_hex_out[64] = '\0';
-		weview_lower_hex(key_hex_out);
+		wxview_lower_hex(key_hex_out);
 		return 1;
 	}
 
 	return 0;
 }
 
-static int weview_scan_sqlcipher_key_for_salt(pid_t pid, const char *target_salt_hex, char *key_hex_out) {
+static int wxview_scan_sqlcipher_key_for_salt(pid_t pid, const char *target_salt_hex, char *key_hex_out) {
 	mach_port_t task = MACH_PORT_NULL;
-	kern_return_t kr = task_for_pid(weview_mach_task_self(), pid, &task);
+	kern_return_t kr = task_for_pid(wxview_mach_task_self(), pid, &task);
 	if (kr != KERN_SUCCESS) return (int)kr;
 
 	mach_vm_address_t addr = 0;
@@ -95,19 +95,19 @@ static int weview_scan_sqlcipher_key_for_salt(pid_t pid, const char *target_salt
 			mach_vm_address_t end = addr + size;
 			while (current < end) {
 				mach_vm_size_t chunk_size = end - current;
-				if (chunk_size > WEVIEW_SCAN_CHUNK_SIZE) chunk_size = WEVIEW_SCAN_CHUNK_SIZE;
+				if (chunk_size > WXVIEW_SCAN_CHUNK_SIZE) chunk_size = WXVIEW_SCAN_CHUNK_SIZE;
 
 				vm_offset_t data = 0;
 				mach_msg_type_number_t data_count = 0;
 				kr = mach_vm_read(task, current, chunk_size, &data, &data_count);
 				if (kr == KERN_SUCCESS && data_count > 0) {
-					int found = weview_scan_sqlcipher_buffer((unsigned char *)data, data_count, target_salt_hex, key_hex_out);
-					mach_vm_deallocate(weview_mach_task_self(), data, data_count);
+					int found = wxview_scan_sqlcipher_buffer((unsigned char *)data, data_count, target_salt_hex, key_hex_out);
+					mach_vm_deallocate(wxview_mach_task_self(), data, data_count);
 					if (found) return 0;
 				}
 
-				if (chunk_size > WEVIEW_PATTERN_LEN) {
-					current += chunk_size - WEVIEW_PATTERN_LEN;
+				if (chunk_size > WXVIEW_PATTERN_LEN) {
+					current += chunk_size - WXVIEW_PATTERN_LEN;
 				} else {
 					current += chunk_size;
 				}
@@ -134,7 +134,7 @@ func scanSQLCipherPragmaKey(pid int, saltHex string) (string, error) {
 	defer C.free(unsafe.Pointer(cSalt))
 
 	keyBuf := make([]C.char, 65)
-	ret := C.weview_scan_sqlcipher_key_for_salt(C.pid_t(pid), cSalt, &keyBuf[0])
+	ret := C.wxview_scan_sqlcipher_key_for_salt(C.pid_t(pid), cSalt, &keyBuf[0])
 	if ret == 0 {
 		return C.GoString(&keyBuf[0]), nil
 	}

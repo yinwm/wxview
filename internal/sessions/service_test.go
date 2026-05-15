@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"weview/internal/contacts"
-	"weview/internal/messages"
+	"wxview/internal/contacts"
+	"wxview/internal/messages"
 )
 
 func TestListSessionTableAndApplyChatInfo(t *testing.T) {

@@ -12,7 +12,7 @@ func TestCacheMetadataFreshness(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	sourcePath := filepath.Join(home, "source.db")
-	cachePath := filepath.Join(home, ".weview", "cache", "wxid_a", "message", "message_0.db")
+	cachePath := filepath.Join(home, ".wxview", "cache", "wxid_a", "message", "message_0.db")
 	if err := os.WriteFile(sourcePath, []byte("source"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestCacheMetadataMissingCacheIsStale(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	sourcePath := filepath.Join(home, "source.db")
-	cachePath := filepath.Join(home, ".weview", "cache", "wxid_a", "message", "message_0.db")
+	cachePath := filepath.Join(home, ".wxview", "cache", "wxid_a", "message", "message_0.db")
 	if err := os.WriteFile(sourcePath, []byte("source"), 0o600); err != nil {
 		t.Fatal(err)
 	}

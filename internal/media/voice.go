@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 type voiceRow struct {

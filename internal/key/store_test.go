@@ -103,7 +103,7 @@ func TestKeyStorePathIsAccountScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".weview", "cache", "wxid_a_b", "keys.json")
+	want := filepath.Join(home, ".wxview", "cache", "wxid_a_b", "keys.json")
 	if path != want {
 		t.Fatalf("KeyStorePath = %q, want %q", path, want)
 	}

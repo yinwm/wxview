@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/app"
+	"wxview/internal/app"
 )
 
 const (
@@ -494,7 +494,7 @@ func convertHEVCToJPG(data []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	in, err := os.CreateTemp("", "weview-wxgf-*.hevc")
+	in, err := os.CreateTemp("", "wxview-wxgf-*.hevc")
 	if err != nil {
 		return nil
 	}

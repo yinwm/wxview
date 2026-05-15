@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 type avatarRow struct {

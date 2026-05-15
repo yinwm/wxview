@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"weview/internal/decrypt"
+	"wxview/internal/decrypt"
 )
 
 func ScanContactKey(ctx context.Context, saltHex string, page1 []byte) (string, error) {

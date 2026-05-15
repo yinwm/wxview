@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"weview/internal/messages"
-	"weview/internal/sqlitecli"
+	"wxview/internal/messages"
+	"wxview/internal/sqlitecli"
 )
 
 type Account struct {
@@ -66,7 +66,7 @@ func (s Service) Accounts(ctx context.Context, query string) ([]Account, error) 
 	}
 	if _, err := os.Stat(s.ContactDB); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("contact cache does not exist: run `weview contacts --refresh` or `weview init` first")
+			return nil, fmt.Errorf("contact cache does not exist: run `wxview contacts --refresh` or `wxview init` first")
 		}
 		return nil, err
 	}
@@ -113,7 +113,7 @@ func (s Service) List(ctx context.Context, opts QueryOptions) ([]Article, error)
 		return nil, fmt.Errorf("limit and offset must be >= 0")
 	}
 	if len(s.MessageDBs) == 0 {
-		return nil, fmt.Errorf("message cache does not exist: run `sudo weview init` and retry")
+		return nil, fmt.Errorf("message cache does not exist: run `sudo wxview init` and retry")
 	}
 	accounts, err := s.selectedAccounts(ctx, opts)
 	if err != nil {

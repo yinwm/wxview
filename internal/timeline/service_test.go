@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"weview/internal/messages"
+	"wxview/internal/messages"
 )
 
 func TestListMergesChatsAndPagesWithCursor(t *testing.T) {

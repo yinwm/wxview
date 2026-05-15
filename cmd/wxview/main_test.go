@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"weview/internal/contacts"
-	"weview/internal/messages"
-	"weview/internal/sessions"
+	"wxview/internal/contacts"
+	"wxview/internal/messages"
+	"wxview/internal/sessions"
 )
 
 func TestWriteContactsJSON(t *testing.T) {

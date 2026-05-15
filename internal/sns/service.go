@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 type Post struct {
@@ -230,7 +230,7 @@ func (s Service) ensureCache() error {
 	}
 	if _, err := os.Stat(s.CacheDB); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("sns cache does not exist: run `sudo weview init` and retry")
+			return fmt.Errorf("sns cache does not exist: run `sudo wxview init` and retry")
 		}
 		return err
 	}

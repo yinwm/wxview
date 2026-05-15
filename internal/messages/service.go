@@ -16,8 +16,8 @@ import (
 
 	zstdpkg "github.com/klauspost/compress/zstd"
 
-	"weview/internal/media"
-	"weview/internal/sqlitecli"
+	"wxview/internal/media"
+	"wxview/internal/sqlitecli"
 )
 
 type Message struct {
@@ -121,7 +121,7 @@ func (s Service) List(ctx context.Context, opts QueryOptions) ([]Message, error)
 		return nil, fmt.Errorf("start must not be later than end")
 	}
 	if len(s.CacheDBs) == 0 {
-		return nil, fmt.Errorf("message cache does not exist: run `weview messages --refresh --username %s` first", username)
+		return nil, fmt.Errorf("message cache does not exist: run `wxview messages --refresh --username %s` first", username)
 	}
 
 	tableName := TableName(username)

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"weview/internal/app"
-	"weview/internal/key"
+	"wxview/internal/app"
+	"wxview/internal/key"
 )
 
 type Server struct {

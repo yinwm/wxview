@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 const (
@@ -91,7 +91,7 @@ func (s Service) List(ctx context.Context) ([]Contact, error) {
 	}
 	if _, err := os.Stat(s.CacheDB); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("contact cache does not exist: run `weview contacts --refresh` or `weview init` first")
+			return nil, fmt.Errorf("contact cache does not exist: run `wxview contacts --refresh` or `wxview init` first")
 		}
 		return nil, err
 	}
@@ -264,7 +264,7 @@ func (s Service) ensureCache() error {
 	}
 	if _, err := os.Stat(s.CacheDB); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("contact cache does not exist: run `weview contacts --refresh` or `weview init` first")
+			return fmt.Errorf("contact cache does not exist: run `wxview contacts --refresh` or `wxview init` first")
 		}
 		return err
 	}

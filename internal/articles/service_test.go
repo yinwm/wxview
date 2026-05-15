@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"weview/internal/messages"
+	"wxview/internal/messages"
 )
 
 func TestAccountsFiltersOfficialAccounts(t *testing.T) {

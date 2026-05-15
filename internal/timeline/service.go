@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"weview/internal/messages"
+	"wxview/internal/messages"
 )
 
 const cursorVersion = 1

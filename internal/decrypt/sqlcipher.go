@@ -16,7 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 const (

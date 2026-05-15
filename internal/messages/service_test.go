@@ -15,7 +15,7 @@ import (
 
 	zstdpkg "github.com/klauspost/compress/zstd"
 
-	"weview/internal/media"
+	"wxview/internal/media"
 )
 
 func TestListMergesShardsSortsAscendingAndPaginates(t *testing.T) {

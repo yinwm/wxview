@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/app"
+	"wxview/internal/app"
 )
 
 const cacheMetaRelPath = "mtime.json"

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"weview/internal/key"
+	"wxview/internal/key"
 )
 
 func TestRootHelpIsDescriptive(t *testing.T) {
@@ -15,20 +15,20 @@ func TestRootHelpIsDescriptive(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview - Read local WeChat data",
+		"wxview - Read local WeChat data",
 		"Machine-readable usage",
-		"weview init",
-		"weview contacts --help",
-		"weview members --help",
-		"weview sessions --help",
-		"weview unread --help",
-		"weview new-messages --help",
-		"weview messages --help",
-		"weview search --help",
-		"weview timeline --help",
-		"weview favorites --help",
-		"weview articles --help",
-		"weview sns --help",
+		"wxview init",
+		"wxview contacts --help",
+		"wxview members --help",
+		"wxview sessions --help",
+		"wxview unread --help",
+		"wxview new-messages --help",
+		"wxview messages --help",
+		"wxview search --help",
+		"wxview timeline --help",
+		"wxview favorites --help",
+		"wxview articles --help",
+		"wxview sns --help",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("root help missing %q:\n%s", want, text)
@@ -51,7 +51,7 @@ func TestInitOutputDefaultsToSummary(t *testing.T) {
 	}
 	warnings := []key.EnsureWarning{{
 		DBRelPath: "message/message_revoke.db",
-		Message:   "auxiliary key missing; skipped. Retry later with `sudo weview init`.",
+		Message:   "auxiliary key missing; skipped. Retry later with `sudo wxview init`.",
 	}}
 
 	var out bytes.Buffer
@@ -112,7 +112,7 @@ func TestMessagesHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview messages - List WeChat messages",
+		"wxview messages - List WeChat messages",
 		"--username TEXT",
 		"JSON envelope with meta and items",
 		"--start TIME",
@@ -141,7 +141,7 @@ func TestMessagesWithoutArgsShowsHelp(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview messages - List WeChat messages",
+		"wxview messages - List WeChat messages",
 		"Required:",
 		"--username TEXT",
 	} {
@@ -158,7 +158,7 @@ func TestTimelineHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview timeline - List WeChat messages",
+		"wxview timeline - List WeChat messages",
 		"--kind all",
 		"--query TEXT",
 		"--username TEXT",
@@ -181,7 +181,7 @@ func TestTimelineWithoutArgsShowsHelp(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview timeline - List WeChat messages",
+		"wxview timeline - List WeChat messages",
 		"Conversation selection:",
 		"--date today|yesterday|YYYY-MM-DD",
 	} {
@@ -223,10 +223,10 @@ func TestDaemonHelpShowsStatusAndNoQueryAction(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Supported forms",
-		"weview daemon         Show this help.",
-		"weview daemon start",
-		"weview daemon stop",
-		"weview daemon status",
+		"wxview daemon         Show this help.",
+		"wxview daemon start",
+		"wxview daemon stop",
+		"wxview daemon status",
 		"No daemon flags are currently supported",
 		"health",
 		"refresh_contacts",
@@ -253,7 +253,7 @@ func TestSessionsHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview sessions - List recent WeChat sessions",
+		"wxview sessions - List recent WeChat sessions",
 		"session/session.db",
 		"--kind all|friend|chatroom|other",
 		"--query TEXT",
@@ -273,7 +273,7 @@ func TestUnreadHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview unread - List unread WeChat sessions",
+		"wxview unread - List unread WeChat sessions",
 		"--limit N",
 		"--refresh",
 	} {
@@ -290,7 +290,7 @@ func TestNewMessagesHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview new-messages - Return messages newer than the saved checkpoint",
+		"wxview new-messages - Return messages newer than the saved checkpoint",
 		"--reset",
 		"24-hour fallback window",
 		"same item schema as messages/timeline",
@@ -308,7 +308,7 @@ func TestSearchHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview search - Search local WeChat message content",
+		"wxview search - Search local WeChat message content",
 		"--query TEXT",
 		"--chat-query TEXT",
 		"same message",
@@ -386,12 +386,12 @@ func TestMembersHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview members - List group members and owner",
+		"wxview members - List group members and owner",
 		"--username CHATROOM",
 		"--query TEXT",
 		"owner",
 		"is_owner",
-		"weview members --username 123@chatroom --format json",
+		"wxview members --username 123@chatroom --format json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("members help missing %q:\n%s", want, text)
@@ -406,7 +406,7 @@ func TestFavoritesHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview favorites - List WeChat favorites",
+		"wxview favorites - List WeChat favorites",
 		"--type TYPE",
 		"text, image, voice, video, article, location",
 		"favorite/favorite.db",
@@ -425,12 +425,12 @@ func TestArticlesHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview articles - List official-account articles and appmsg posts",
+		"wxview articles - List official-account articles and appmsg posts",
 		"--list-accounts",
 		"--username TEXT",
 		"--query TEXT",
 		"message/biz_message caches",
-		"weview articles --query \"AI\" --date today",
+		"wxview articles --query \"AI\" --date today",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("articles help missing %q:\n%s", want, text)
@@ -445,7 +445,7 @@ func TestSNSHelpIsActionable(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview sns - Read local WeChat Moments data",
+		"wxview sns - Read local WeChat Moments data",
 		"sns feed",
 		"sns search KEYWORD",
 		"sns notifications",
@@ -465,9 +465,9 @@ func TestContactsWithoutArgsShowsHelp(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"weview contacts - List WeChat contacts",
+		"wxview contacts - List WeChat contacts",
 		"No-argument behavior",
-		"weview contacts is intentionally the same as weview contacts --help",
+		"wxview contacts is intentionally the same as wxview contacts --help",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("contacts no-arg help missing %q:\n%s", want, text)
@@ -491,7 +491,7 @@ func TestKeyCommandIsNotAccepted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected key command to be rejected")
 	}
-	if strings.Contains(out.String(), "sudo weview key") {
+	if strings.Contains(out.String(), "sudo wxview key") {
 		t.Fatalf("key command should not be advertised:\n%s", out.String())
 	}
 }

@@ -1,4 +1,4 @@
-module weview
+module wxview
 
 go 1.25
 

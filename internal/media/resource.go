@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"weview/internal/sqlitecli"
+	"wxview/internal/sqlitecli"
 )
 
 type resourceMediaFile struct {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"weview/internal/app"
+	"wxview/internal/app"
 )
 
 const keyStoreRelPath = "keys.json"

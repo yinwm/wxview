@@ -19,17 +19,17 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"weview/internal/app"
-	"weview/internal/articles"
-	"weview/internal/contacts"
-	"weview/internal/daemon"
-	"weview/internal/favorites"
-	"weview/internal/key"
-	"weview/internal/media"
-	"weview/internal/messages"
-	"weview/internal/sessions"
-	"weview/internal/sns"
-	"weview/internal/timeline"
+	"wxview/internal/app"
+	"wxview/internal/articles"
+	"wxview/internal/contacts"
+	"wxview/internal/daemon"
+	"wxview/internal/favorites"
+	"wxview/internal/key"
+	"wxview/internal/media"
+	"wxview/internal/messages"
+	"wxview/internal/sessions"
+	"wxview/internal/sns"
+	"wxview/internal/timeline"
 )
 
 const messageEnvelopeSchemaVersion = 1
@@ -96,55 +96,55 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `weview - Read local WeChat data
+	fmt.Fprintln(w, `wxview - Read local WeChat data
 
-Weview is a local-first CLI for reading macOS WeChat 4.x data from the
+Wxview is a local-first CLI for reading macOS WeChat 4.x data from the
 user's own machine. It can obtain database keys, decrypt local WeChat
-databases into ~/.weview/cache, list contacts or contact-table groups, and
+databases into ~/.wxview/cache, list contacts or contact-table groups, and
 query message history for an explicit username.
 
 Commands:
-  weview init       First-time setup: detect WeChat, get supported DB keys,
+  wxview init       First-time setup: detect WeChat, get supported DB keys,
                     and save them locally. Usually run once at the beginning.
-  weview daemon     Show daemon help.
-  weview contacts   List contacts from the decrypted contact cache.
-  weview members    List members and owner for an explicit chatroom username.
-  weview sessions   List recent chats from the decrypted session cache.
-  weview unread     List unread chats from the decrypted session cache.
-  weview new-messages
+  wxview daemon     Show daemon help.
+  wxview contacts   List contacts from the decrypted contact cache.
+  wxview members    List members and owner for an explicit chatroom username.
+  wxview sessions   List recent chats from the decrypted session cache.
+  wxview unread     List unread chats from the decrypted session cache.
+  wxview new-messages
                     Return messages newer than the account-scoped checkpoint.
-  weview messages   List messages for an explicit username.
-  weview search     Search message content across selected conversations.
-  weview timeline   List messages across selected conversations by time.
-  weview favorites  List WeChat favorites from the local favorite cache.
-  weview articles   List official-account articles and appmsg posts.
-  weview sns        Read local Moments feed, search results, or notifications.
-  weview help CMD   Show detailed help for a command.
+  wxview messages   List messages for an explicit username.
+  wxview search     Search message content across selected conversations.
+  wxview timeline   List messages across selected conversations by time.
+  wxview favorites  List WeChat favorites from the local favorite cache.
+  wxview articles   List official-account articles and appmsg posts.
+  wxview sns        Read local Moments feed, search results, or notifications.
+  wxview help CMD   Show detailed help for a command.
 
 Common examples:
-  sudo weview init
-  weview contacts --format json
-  weview contacts --kind friend --format jsonl
-  weview contacts --kind friend --format csv
-  weview contacts --kind friend --query AI --limit 20 --format json
-  weview contacts --kind chatroom --format table
-  weview contacts --detail --username wxid_xxx --format json
-  weview members --username 123@chatroom --format json
-  weview sessions --limit 20 --format json
-  weview unread --limit 20 --format json
-  weview new-messages --limit 100 --format json
-  weview search --query "AI" --kind chatroom --date today --format json
-  weview contacts --refresh --format json
-  weview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
-  weview messages --username wxid_xxx --date today --limit 100 --format json
-  weview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
-  weview timeline --kind chatroom --query AI --date today --limit 200 --format json
-  weview favorites --type article --limit 20 --format json
-  weview articles --query AI --date today --format json
-  weview sns feed --date today --limit 20 --format json
-  weview sns notifications --include-read --limit 20 --format json
-  weview daemon start
-  weview daemon status
+  sudo wxview init
+  wxview contacts --format json
+  wxview contacts --kind friend --format jsonl
+  wxview contacts --kind friend --format csv
+  wxview contacts --kind friend --query AI --limit 20 --format json
+  wxview contacts --kind chatroom --format table
+  wxview contacts --detail --username wxid_xxx --format json
+  wxview members --username 123@chatroom --format json
+  wxview sessions --limit 20 --format json
+  wxview unread --limit 20 --format json
+  wxview new-messages --limit 100 --format json
+  wxview search --query "AI" --kind chatroom --date today --format json
+  wxview contacts --refresh --format json
+  wxview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
+  wxview messages --username wxid_xxx --date today --limit 100 --format json
+  wxview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
+  wxview timeline --kind chatroom --query AI --date today --limit 200 --format json
+  wxview favorites --type article --limit 20 --format json
+  wxview articles --query AI --date today --format json
+  wxview sns feed --date today --limit 20 --format json
+  wxview sns notifications --include-read --limit 20 --format json
+  wxview daemon start
+  wxview daemon status
 
 Machine-readable usage:
   Use --format json for machine-readable output. messages and timeline use a
@@ -163,19 +163,19 @@ Current scope:
   Not included yet: WAL patching, public Web API.
 
   Run:
-  weview init --help
-  weview contacts --help
-  weview members --help
-  weview sessions --help
-  weview unread --help
-  weview new-messages --help
-  weview messages --help
-  weview search --help
-  weview timeline --help
-  weview favorites --help
-  weview articles --help
-  weview sns --help
-  weview daemon --help`)
+  wxview init --help
+  wxview contacts --help
+  wxview members --help
+  wxview sessions --help
+  wxview unread --help
+  wxview new-messages --help
+  wxview messages --help
+  wxview search --help
+  wxview timeline --help
+  wxview favorites --help
+  wxview articles --help
+  wxview sns --help
+  wxview daemon --help`)
 }
 
 func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
@@ -214,11 +214,11 @@ func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func initUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview init - First-time setup for reading local WeChat data
+	fmt.Fprintln(w, `wxview init - First-time setup for reading local WeChat data
 
 Usage:
-  sudo weview init [--verbose]
-  sudo go run ./cmd/weview init [--verbose]
+  sudo wxview init [--verbose]
+  sudo go run ./cmd/wxview init [--verbose]
 
 When to run:
   Run this at the beginning before using contacts/daemon.
@@ -235,14 +235,14 @@ What it does:
      and best-effort auxiliary message databases:
      message/message_fts.db, message/message_resource.db, message/message_revoke.db
   3. Reads each discovered DB page 1 salt.
-  4. Reuses existing valid keys from ~/.weview/cache/<account>/keys.json, or
+  4. Reuses existing valid keys from ~/.wxview/cache/<account>/keys.json, or
      scans the running WeChat process memory for missing SQLCipher raw keys.
   5. Verifies each key with page 1 HMAC.
   6. Saves version 1 account metadata and keys in
-     ~/.weview/cache/<account>/keys.json with mode 0600.
+     ~/.wxview/cache/<account>/keys.json with mode 0600.
 
 Required DB key failures stop init. Auxiliary message DB failures are reported
-as warnings and can be retried later with sudo weview init.
+as warnings and can be retried later with sudo wxview init.
 
 Output fields:
   account       WeChat account directory name.
@@ -263,45 +263,45 @@ Notes:
 }
 
 const (
-	daemonForegroundEnv   = "WEVIEW_DAEMON_FOREGROUND"
-	daemonSupportedForms  = "`weview daemon`, `weview daemon start`, `weview daemon stop`, `weview daemon status`"
+	daemonForegroundEnv   = "WXVIEW_DAEMON_FOREGROUND"
+	daemonSupportedForms  = "`wxview daemon`, `wxview daemon start`, `wxview daemon stop`, `wxview daemon status`"
 	daemonStartWait       = 15 * time.Second
 	daemonStopWait        = 5 * time.Second
 	daemonStatusPollEvery = 100 * time.Millisecond
 )
 
 func daemonUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview daemon - Manage the local WeChat contact cache daemon
+	fmt.Fprintln(w, `wxview daemon - Manage the local WeChat contact cache daemon
 
 Usage:
-  weview daemon
-  weview daemon start
-  weview daemon stop
-  weview daemon status
+  wxview daemon
+  wxview daemon start
+  wxview daemon stop
+  wxview daemon status
 
 Supported forms:
-  weview daemon         Show this help.
-  weview daemon start   Start the daemon in the background.
-  weview daemon stop    Stop the background daemon.
-  weview daemon status  Check whether ~/.weview/weview.sock responds to health.
+  wxview daemon         Show this help.
+  wxview daemon start   Start the daemon in the background.
+  wxview daemon stop    Stop the background daemon.
+  wxview daemon status  Check whether ~/.wxview/wxview.sock responds to health.
 
 Flags:
   No daemon flags are currently supported except -h/--help/help.
 
 What it does:
-  1. Uses keys prepared by weview init.
+  1. Uses keys prepared by wxview init.
   2. Decrypts contact/contact.db into:
-     ~/.weview/cache/<account>/contact/contact.db
+     ~/.wxview/cache/<account>/contact/contact.db
   3. Decrypts supported message DBs into:
-     ~/.weview/cache/<account>/message/
+     ~/.wxview/cache/<account>/message/
   4. Opens an internal Unix socket:
-     ~/.weview/weview.sock
+     ~/.wxview/wxview.sock
   5. Watches contact, session, supported message/media, head_image, favorite,
      and sns DB files and
      refreshes affected caches after a debounce delay when they change.
      The current account is resolved from DB files opened by WeChat, so account
      switches while the daemon is running move to the new account cache.
-     Unchanged DBs are skipped using ~/.weview/cache/<account>/mtime.json.
+     Unchanged DBs are skipped using ~/.wxview/cache/<account>/mtime.json.
 
 Internal daemon actions:
   health
@@ -315,25 +315,25 @@ Internal daemon actions:
 
 Notes:
   This is an internal local transport, not a public Web API.
-  daemon start writes daemon logs to ~/.weview/weview.log.
+  daemon start writes daemon logs to ~/.wxview/wxview.log.
   V1 does not patch or stream .db-wal, so refresh is near-real-time after WeChat
   checkpoints/writes the main DB.`)
 }
 
 func contactsUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview contacts - List WeChat contacts and contact-table groups
+	fmt.Fprintln(w, `wxview contacts - List WeChat contacts and contact-table groups
 
 Usage:
-  weview contacts --format table|json|jsonl|csv [flags]
-  weview contacts --detail --username USERNAME --format json [flags]
-  weview contacts --count [flags]
-  weview contacts --help
+  wxview contacts --format table|json|jsonl|csv [flags]
+  wxview contacts --detail --username USERNAME --format json [flags]
+  wxview contacts --count [flags]
+  wxview contacts --help
 
 Alias:
-  weview contact
+  wxview contact
 
 No-argument behavior:
-  weview contacts is intentionally the same as weview contacts --help.
+  wxview contacts is intentionally the same as wxview contacts --help.
   To query data, pass an explicit output/filter flag such as --format or --kind.
 
 Flags:
@@ -379,21 +379,21 @@ Detail-only fields:
   is_chatroom, and is_official are only returned by --detail.
 
 Examples for humans:
-  weview contacts --format table
-  weview contacts --kind friend --format table
-  weview contacts --kind chatroom --format table
-  weview contacts --kind friend --query AI --limit 20 --format table
+  wxview contacts --format table
+  wxview contacts --kind friend --format table
+  wxview contacts --kind chatroom --format table
+  wxview contacts --kind friend --query AI --limit 20 --format table
 
 Examples for AI/tools:
-  weview contacts --format json
-  weview contacts --kind friend --format json
-  weview contacts --kind chatroom --format jsonl
-  weview contacts --kind friend --format csv
-  weview contacts --kind friend --query AI --limit 20 --offset 0 --sort username --format json
-  weview contacts --username wxid_xxx --format json
-  weview contacts --detail --username wxid_xxx --format json
-  weview contacts --kind friend --count
-  weview contacts --refresh --format json
+  wxview contacts --format json
+  wxview contacts --kind friend --format json
+  wxview contacts --kind chatroom --format jsonl
+  wxview contacts --kind friend --format csv
+  wxview contacts --kind friend --query AI --limit 20 --offset 0 --sort username --format json
+  wxview contacts --username wxid_xxx --format json
+  wxview contacts --detail --username wxid_xxx --format json
+  wxview contacts --kind friend --count
+  wxview contacts --refresh --format json
 
 Runtime behavior:
   This command always reads contacts from the local decrypted cache.
@@ -402,12 +402,12 @@ Runtime behavior:
 }
 
 func membersUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview members - List group members and owner from the contact cache
+	fmt.Fprintln(w, `wxview members - List group members and owner from the contact cache
 
 Usage:
-  weview members --username CHATROOM --format table|json|jsonl|csv [flags]
-  weview members --query TEXT --format json [flags]
-  weview members --help
+  wxview members --username CHATROOM --format table|json|jsonl|csv [flags]
+  wxview members --query TEXT --format json [flags]
+  wxview members --help
 
 Selection:
   --username TEXT  Exact chatroom username, e.g. 123@chatroom.
@@ -431,17 +431,17 @@ Output fields:
                      nick_name, kind, and is_owner.
 
 Examples:
-  weview members --username 123@chatroom --format json
-  weview members --query "AI交流群" --format table
-  weview members --username 123@chatroom --refresh --format csv`)
+  wxview members --username 123@chatroom --format json
+  wxview members --query "AI交流群" --format table
+  wxview members --username 123@chatroom --refresh --format csv`)
 }
 
 func sessionsUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview sessions - List recent WeChat sessions
+	fmt.Fprintln(w, `wxview sessions - List recent WeChat sessions
 
 Usage:
-  weview sessions --format table|json|jsonl|csv [flags]
-  weview sessions --help
+  wxview sessions --format table|json|jsonl|csv [flags]
+  wxview sessions --help
 
 Flags:
   --format table|json|jsonl|csv
@@ -458,17 +458,17 @@ Output fields:
   and last_sender_display_name.
 
 Examples:
-  weview sessions --limit 20 --format table
-  weview sessions --kind chatroom --query AI --format json
-  weview sessions --refresh --format jsonl`)
+  wxview sessions --limit 20 --format table
+  wxview sessions --kind chatroom --query AI --format json
+  wxview sessions --refresh --format jsonl`)
 }
 
 func unreadUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview unread - List unread WeChat sessions
+	fmt.Fprintln(w, `wxview unread - List unread WeChat sessions
 
 Usage:
-  weview unread --format table|json|jsonl|csv [flags]
-  weview unread --help
+  wxview unread --format table|json|jsonl|csv [flags]
+  wxview unread --help
 
 Flags:
   --format table|json|jsonl|csv
@@ -479,16 +479,16 @@ Flags:
   --refresh        Refresh session/session.db cache before querying.
 
 Examples:
-  weview unread --format json
-  weview unread --kind chatroom --limit 20 --format table`)
+  wxview unread --format json
+  wxview unread --kind chatroom --limit 20 --format table`)
 }
 
 func newMessagesUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview new-messages - Return messages newer than the saved checkpoint
+	fmt.Fprintln(w, `wxview new-messages - Return messages newer than the saved checkpoint
 
 Usage:
-  weview new-messages --format table|json|jsonl|csv [flags]
-  weview new-messages --help
+  wxview new-messages --format table|json|jsonl|csv [flags]
+  wxview new-messages --help
 
 Flags:
   --format table|json|jsonl|csv
@@ -498,21 +498,21 @@ Flags:
   --refresh        Refresh session and message-related caches before querying.
 
 Behavior:
-  State is account-scoped under ~/.weview/cache/<account>/state/.
+  State is account-scoped under ~/.wxview/cache/<account>/state/.
   First run or --reset uses a 24-hour fallback window instead of returning all
   historical messages. Results share the same item schema as messages/timeline.
 
 Examples:
-  weview new-messages --limit 100 --format json
-  weview new-messages --reset --format table`)
+  wxview new-messages --limit 100 --format json
+  wxview new-messages --reset --format table`)
 }
 
 func messagesUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview messages - List WeChat messages for one username
+	fmt.Fprintln(w, `wxview messages - List WeChat messages for one username
 
 Usage:
-  weview messages --username USERNAME --format table|json|jsonl|csv [flags]
-  weview messages --help
+  wxview messages --username USERNAME --format table|json|jsonl|csv [flags]
+  wxview messages --help
 
 Required:
   --username TEXT  Exact WeChat username, e.g. wxid_* or *@chatroom.
@@ -578,12 +578,12 @@ JSON output:
   jsonl, csv, and table outputs remain item-only.
 
 Examples:
-  weview messages --username wxid_xxx --format table
-  weview messages --username wxid_xxx --date today --limit 100 --format json
-  weview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
-  weview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
-  weview messages --username 123@chatroom --limit 100 --offset 0 --format jsonl
-  weview messages --username wxid_xxx --source --refresh --format json
+  wxview messages --username wxid_xxx --format table
+  wxview messages --username wxid_xxx --date today --limit 100 --format json
+  wxview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
+  wxview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
+  wxview messages --username 123@chatroom --limit 100 --offset 0 --format jsonl
+  wxview messages --username wxid_xxx --source --refresh --format json
 
 Runtime behavior:
   This command reads message rows from local decrypted message caches and merges
@@ -593,16 +593,16 @@ Runtime behavior:
   can be slow. Prefer bounded time windows and --after-seq pagination.
   Image and video messages in the returned page are resolved to local files
   automatically. WeChat .dat images and recognizable .dat videos are decoded
-  or normalized into ~/.weview/cache/<account>/media/.
-  If a required message DB key is missing, run sudo weview init first.`)
+  or normalized into ~/.wxview/cache/<account>/media/.
+  If a required message DB key is missing, run sudo wxview init first.`)
 }
 
 func searchUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview search - Search local WeChat message content
+	fmt.Fprintln(w, `wxview search - Search local WeChat message content
 
 Usage:
-  weview search --query TEXT --format table|json|jsonl|csv [flags]
-  weview search --help
+  wxview search --query TEXT --format table|json|jsonl|csv [flags]
+  wxview search --help
 
 Required:
   --query TEXT     Message-content keyword. This searches decoded content and
@@ -634,18 +634,18 @@ JSON output:
   item schema as messages and timeline.
 
 Examples:
-  weview search --query "AI" --date today --format json
-  weview search --query "开会" --kind chatroom --chat-query 项目 --limit 50 --format table
-  weview search --query "合同" --username wxid_xxx --start "2026-05-01" --format json`)
+  wxview search --query "AI" --date today --format json
+  wxview search --query "开会" --kind chatroom --chat-query 项目 --limit 50 --format table
+  wxview search --query "合同" --username wxid_xxx --start "2026-05-01" --format json`)
 }
 
 func timelineUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview timeline - List WeChat messages across selected conversations
+	fmt.Fprintln(w, `wxview timeline - List WeChat messages across selected conversations
 
 Usage:
-  weview timeline --kind all|friend|chatroom|other --query TEXT --date today --format json [flags]
-  weview timeline --username USERNAME --start TIME --end TIME --format json [flags]
-  weview timeline --help
+  wxview timeline --kind all|friend|chatroom|other --query TEXT --date today --format json [flags]
+  wxview timeline --username USERNAME --start TIME --end TIME --format json [flags]
+  wxview timeline --help
 
 Conversation selection:
   --kind all       Select from all conversation rows in the contact cache.
@@ -677,10 +677,10 @@ Other flags:
   --refresh        Refresh contact and message caches before querying.
 
 Examples:
-  weview timeline --kind chatroom --query AI --date today --limit 200 --format json
-  weview timeline --kind chatroom --query AI --start "2026-05-14" --end "2026-05-14" --format json
-  weview timeline --kind chatroom --query AI --start "2026-05-14 00:00:00" --end "2026-05-14 23:59:59" --limit 200 --cursor TOKEN --format json
-  weview timeline --username wxid_xxx --date yesterday --format jsonl
+  wxview timeline --kind chatroom --query AI --date today --limit 200 --format json
+  wxview timeline --kind chatroom --query AI --start "2026-05-14" --end "2026-05-14" --format json
+  wxview timeline --kind chatroom --query AI --start "2026-05-14 00:00:00" --end "2026-05-14 23:59:59" --limit 200 --cursor TOKEN --format json
+  wxview timeline --username wxid_xxx --date yesterday --format jsonl
 
 Runtime behavior:
   This command selects conversations from the local contact cache, reads
@@ -696,11 +696,11 @@ Runtime behavior:
 }
 
 func favoritesUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview favorites - List WeChat favorites from the local cache
+	fmt.Fprintln(w, `wxview favorites - List WeChat favorites from the local cache
 
 Usage:
-  weview favorites --format table|json|jsonl|csv [flags]
-  weview favorites --help
+  wxview favorites --format table|json|jsonl|csv [flags]
+  wxview favorites --help
 
 Flags:
   --format table   Human-readable table output.
@@ -724,19 +724,19 @@ Output fields:
   media_status. CDN keys are not copied to output.
 
 Examples:
-  weview favorites --type article --limit 20 --format json
-  weview favorites --query "AI" --format table
-  weview favorites --refresh --format jsonl`)
+  wxview favorites --type article --limit 20 --format json
+  wxview favorites --query "AI" --format table
+  wxview favorites --refresh --format jsonl`)
 }
 
 func articlesUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview articles - List official-account articles and appmsg posts
+	fmt.Fprintln(w, `wxview articles - List official-account articles and appmsg posts
 
 Usage:
-  weview articles --list-accounts --format json [flags]
-  weview articles --username USERNAME --format table|json|jsonl|csv [flags]
-  weview articles --query TEXT --format json [flags]
-  weview articles --help
+  wxview articles --list-accounts --format json [flags]
+  wxview articles --username USERNAME --format table|json|jsonl|csv [flags]
+  wxview articles --query TEXT --format json [flags]
+  wxview articles --help
 
 Selection:
   --list-accounts  List followed official accounts from contact/contact.db.
@@ -762,19 +762,19 @@ Flags:
   --refresh        Refresh contact and message/biz_message caches before querying.
 
 Examples:
-  weview articles --list-accounts --format json
-  weview articles --username gh_xxx --limit 20 --format json
-  weview articles --query "AI" --date today --format table`)
+  wxview articles --list-accounts --format json
+  wxview articles --username gh_xxx --limit 20 --format json
+  wxview articles --query "AI" --date today --format table`)
 }
 
 func snsUsage(w io.Writer) {
-	fmt.Fprintln(w, `weview sns - Read local WeChat Moments data from sns/sns.db
+	fmt.Fprintln(w, `wxview sns - Read local WeChat Moments data from sns/sns.db
 
 Usage:
-  weview sns feed --format table|json|jsonl|csv [flags]
-  weview sns search KEYWORD --format json [flags]
-  weview sns notifications --format table|json|jsonl|csv [flags]
-  weview sns --help
+  wxview sns feed --format table|json|jsonl|csv [flags]
+  wxview sns search KEYWORD --format json [flags]
+  wxview sns notifications --format table|json|jsonl|csv [flags]
+  wxview sns --help
 
 Subcommands:
   feed           List local Moments posts cached by WeChat.
@@ -799,9 +799,9 @@ Output notes:
   when present. It intentionally does not expose CDN key/token fields.
 
 Examples:
-  weview sns feed --date today --limit 20 --format json
-  weview sns search "AI" --start "2026-05-01" --format table
-  weview sns notifications --include-read --limit 20 --format json`)
+  wxview sns feed --date today --limit 20 --format json
+  wxview sns search "AI" --start "2026-05-01" --format table
+  wxview sns notifications --include-read --limit 20 --format json`)
 }
 
 func hasHelp(args []string) bool {
