@@ -1,10 +1,14 @@
 package daemon
 
 const (
-	ActionHealth          = "health"
-	ActionRefreshContacts = "refresh_contacts"
-	ActionRefreshMessages = "refresh_messages"
-	ActionStop            = "stop"
+	ActionHealth           = "health"
+	ActionRefreshContacts  = "refresh_contacts"
+	ActionRefreshSessions  = "refresh_sessions"
+	ActionRefreshMessages  = "refresh_messages"
+	ActionRefreshAvatars   = "refresh_avatars"
+	ActionRefreshFavorites = "refresh_favorites"
+	ActionRefreshSNS       = "refresh_sns"
+	ActionStop             = "stop"
 )
 
 type Request struct {

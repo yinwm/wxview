@@ -3,6 +3,8 @@ package messages
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -161,6 +163,20 @@ type emojiMsg struct {
 	CdnURL string `xml:"cdnurl,attr"`
 }
 
+type voipMsg struct {
+	Type   string        `xml:"type,attr"`
+	Bubble voipBubbleMsg `xml:"VoIPBubbleMsg"`
+}
+
+type voipBubbleMsg struct {
+	Msg      string `xml:"msg"`
+	MsgType  string `xml:"msg_type"`
+	Duration string `xml:"duration"`
+	Business string `xml:"business"`
+}
+
+var clockDurationPattern = regexp.MustCompile(`\b\d{1,2}(?::\d{2}){1,2}\b`)
+
 func normalizeContent(msgType int64, subType int64, raw string) normalizedContent {
 	switch msgType {
 	case messageTypeText:
@@ -183,12 +199,36 @@ func normalizeContent(msgType int64, subType int64, raw string) normalizedConten
 	case messageTypeShare:
 		return normalizeShare(subType, raw)
 	case messageTypeVOIP:
-		return normalizedContent{Type: "voip", Text: "[语音通话]"}
+		return normalizeVOIP(raw)
 	case messageTypeSystem:
 		return normalizedContent{Type: "system", Text: strings.TrimSpace(raw)}
 	default:
 		return normalizedContent{Type: "unknown", Text: strings.TrimSpace(raw)}
 	}
+}
+
+func normalizeVOIP(raw string) normalizedContent {
+	msg, ok := parseVOIP(raw)
+	if !ok {
+		return normalizedContent{Type: "voip", Text: "[语音通话]"}
+	}
+
+	details := map[string]string{}
+	callText := strings.TrimSpace(msg.Bubble.Msg)
+	putIfNotEmpty(details, "call_text", callText)
+	putIfNotEmpty(details, "voip_type", msg.Type)
+	putIfNotEmpty(details, "msg_type", msg.Bubble.MsgType)
+	putIfNotEmpty(details, "business", msg.Bubble.Business)
+
+	durationText := clockDurationPattern.FindString(callText)
+	putIfNotEmpty(details, "duration_text", durationText)
+	if seconds, ok := parsePositiveSeconds(msg.Bubble.Duration); ok {
+		details["duration_seconds"] = strconv.Itoa(seconds)
+	} else if seconds, ok := parseClockDuration(durationText); ok {
+		details["duration_seconds"] = strconv.Itoa(seconds)
+	}
+
+	return normalizedContent{Type: "voip", Text: bracketText("语音通话", callText), Details: detailsOrNil(details)}
 }
 
 func normalizeImage(raw string) normalizedContent {
@@ -338,6 +378,17 @@ func parseMedia(raw string) (mediaMsg, bool) {
 	return msg, true
 }
 
+func parseVOIP(raw string) (voipMsg, bool) {
+	var msg voipMsg
+	if err := xml.Unmarshal([]byte(raw), &msg); err != nil {
+		return voipMsg{}, false
+	}
+	if strings.TrimSpace(msg.Bubble.Msg) == "" && strings.TrimSpace(msg.Type) == "" && strings.TrimSpace(msg.Bubble.MsgType) == "" {
+		return voipMsg{}, false
+	}
+	return msg, true
+}
+
 func linkText(title string, desc string, rawURL string) string {
 	title = firstNonEmpty(strings.TrimSpace(title), "链接")
 	desc = strings.TrimSpace(desc)
@@ -401,6 +452,36 @@ func payText(info *wcPayInfo) string {
 		return "[转账]"
 	}
 	return fmt.Sprintf("[转账|%s%s]%s", action, info.FeeDesc, memo)
+}
+
+func parsePositiveSeconds(raw string) (int, bool) {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func parseClockDuration(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, false
+	}
+	values := make([]int, 0, len(parts))
+	for _, part := range parts {
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 {
+			return 0, false
+		}
+		values = append(values, value)
+	}
+	if len(values) == 2 {
+		return values[0]*60 + values[1], true
+	}
+	return values[0]*3600 + values[1]*60 + values[2], true
 }
 
 func compactStrings(values ...string) []string {

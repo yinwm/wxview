@@ -18,6 +18,10 @@ import (
 
 const contactRelPath = "contact/contact.db"
 const messageRelDir = "message"
+const sessionRelPath = "session/session.db"
+const favoriteRelPath = "favorite/favorite.db"
+const snsRelPath = "sns/sns.db"
+const headImageRelPath = "head_image/head_image.db"
 
 var messageAuxRelPaths = []string{
 	"message/message_fts.db",
@@ -73,6 +77,26 @@ func DiscoverMessageDBs() ([]TargetDB, error) {
 	if err != nil {
 		return nil, err
 	}
+	return discoverMessageDBsByPrefix(contactTarget, "message_")
+}
+
+func DiscoverBizMessageDBs() ([]TargetDB, error) {
+	contactTarget, err := DiscoverContactDB()
+	if err != nil {
+		return nil, err
+	}
+	return discoverMessageDBsByPrefix(contactTarget, "biz_message_")
+}
+
+func DiscoverMediaDBs() ([]TargetDB, error) {
+	contactTarget, err := DiscoverContactDB()
+	if err != nil {
+		return nil, err
+	}
+	return discoverMessageDBsByPrefix(contactTarget, "media_")
+}
+
+func discoverMessageDBsByPrefix(contactTarget TargetDB, prefix string) ([]TargetDB, error) {
 	messageDir := filepath.Join(contactTarget.DataDir, messageRelDir)
 	entries, err := os.ReadDir(messageDir)
 	if err != nil {
@@ -84,7 +108,7 @@ func DiscoverMessageDBs() ([]TargetDB, error) {
 		if entry.IsDir() {
 			continue
 		}
-		_, ok := messageShardIndex(entry.Name())
+		_, ok := numberedShardIndex(entry.Name(), prefix)
 		if !ok {
 			continue
 		}
@@ -102,11 +126,11 @@ func DiscoverMessageDBs() ([]TargetDB, error) {
 		})
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no WeChat message shard database found under %s", messageDir)
+		return nil, fmt.Errorf("no WeChat %sdatabase shard found under %s", prefix, messageDir)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		left, _ := messageShardIndex(filepath.Base(candidates[i].DBPath))
-		right, _ := messageShardIndex(filepath.Base(candidates[j].DBPath))
+		left, _ := numberedShardIndex(filepath.Base(candidates[i].DBPath), prefix)
+		right, _ := numberedShardIndex(filepath.Base(candidates[j].DBPath), prefix)
 		return left < right
 	})
 	return candidates, nil
@@ -116,6 +140,12 @@ func DiscoverMessageRelatedDBs() ([]TargetDB, error) {
 	targets, err := DiscoverMessageDBs()
 	if err != nil {
 		return nil, err
+	}
+	if bizTargets, err := DiscoverBizMessageDBs(); err == nil {
+		targets = append(targets, bizTargets...)
+	}
+	if mediaTargets, err := DiscoverMediaDBs(); err == nil {
+		targets = append(targets, mediaTargets...)
 	}
 	auxTargets, err := DiscoverMessageAuxDBs()
 	if err != nil {
@@ -166,21 +196,74 @@ func DiscoverSupportedDBs() ([]TargetDB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if bizTargets, err := DiscoverBizMessageDBs(); err == nil {
+		targets = append(targets, bizTargets...)
+	}
 	auxTargets, err := DiscoverMessageAuxDBs()
 	if err != nil {
 		return nil, err
 	}
 	targets = append(targets, auxTargets...)
+	if sessionTarget, ok := DiscoverSessionDB(); ok {
+		targets = append(targets, sessionTarget)
+	}
+	if favoriteTarget, ok := DiscoverFavoriteDB(); ok {
+		targets = append(targets, favoriteTarget)
+	}
+	if snsTarget, ok := DiscoverSNSDB(); ok {
+		targets = append(targets, snsTarget)
+	}
+	if headImageTarget, ok := DiscoverHeadImageDB(); ok {
+		targets = append(targets, headImageTarget)
+	}
 	return targets, nil
 }
 
 func messageShardIndex(name string) (int, bool) {
-	if !strings.HasPrefix(name, "message_") || !strings.HasSuffix(name, ".db") {
+	return numberedShardIndex(name, "message_")
+}
+
+func numberedShardIndex(name string, prefix string) (int, bool) {
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".db") {
 		return 0, false
 	}
-	text := strings.TrimSuffix(strings.TrimPrefix(name, "message_"), ".db")
+	text := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".db")
 	index, err := strconv.Atoi(text)
 	return index, err == nil
+}
+
+func DiscoverFavoriteDB() (TargetDB, bool) {
+	return discoverOptionalDB(favoriteRelPath)
+}
+
+func DiscoverSessionDB() (TargetDB, bool) {
+	return discoverOptionalDB(sessionRelPath)
+}
+
+func DiscoverSNSDB() (TargetDB, bool) {
+	return discoverOptionalDB(snsRelPath)
+}
+
+func DiscoverHeadImageDB() (TargetDB, bool) {
+	return discoverOptionalDB(headImageRelPath)
+}
+
+func discoverOptionalDB(relPath string) (TargetDB, bool) {
+	contactTarget, err := DiscoverContactDB()
+	if err != nil {
+		return TargetDB{}, false
+	}
+	dbPath := filepath.Join(contactTarget.DataDir, filepath.FromSlash(relPath))
+	info, err := os.Stat(dbPath)
+	if err != nil || info.IsDir() {
+		return TargetDB{}, false
+	}
+	return TargetDB{
+		Account:   contactTarget.Account,
+		DataDir:   contactTarget.DataDir,
+		DBRelPath: relPath,
+		DBPath:    dbPath,
+	}, true
 }
 
 func dbModUnix(path string) int64 {

@@ -86,6 +86,18 @@ type QueryOptions struct {
 	Offset        int
 }
 
+type SearchOptions struct {
+	Chats         []ChatInfo
+	Query         string
+	Start         int64
+	End           int64
+	HasStart      bool
+	HasEnd        bool
+	IncludeSource bool
+	Limit         int
+	Offset        int
+}
+
 type Service struct {
 	CacheDBs []string
 }
@@ -159,9 +171,81 @@ func (s Service) List(ctx context.Context, opts QueryOptions) ([]Message, error)
 	return page, nil
 }
 
+func (s Service) Search(ctx context.Context, opts SearchOptions) ([]Message, int, error) {
+	needle := strings.ToLower(strings.TrimSpace(opts.Query))
+	if needle == "" {
+		return nil, 0, fmt.Errorf("query is required")
+	}
+	if opts.Limit < 0 {
+		return nil, 0, fmt.Errorf("limit must be >= 0")
+	}
+	if opts.Offset < 0 {
+		return nil, 0, fmt.Errorf("offset must be >= 0")
+	}
+	if opts.HasStart && opts.HasEnd && opts.Start > opts.End {
+		return nil, 0, fmt.Errorf("start must not be later than end")
+	}
+	if len(opts.Chats) == 0 {
+		return []Message{}, 0, nil
+	}
+
+	chatInfo := make(map[string]ChatInfo, len(opts.Chats))
+	var matched []Message
+	for _, chat := range opts.Chats {
+		username := strings.TrimSpace(chat.Username)
+		if username == "" {
+			continue
+		}
+		chatInfo[username] = chat
+		rows, err := s.List(ctx, QueryOptions{
+			Username:      username,
+			Start:         opts.Start,
+			End:           opts.End,
+			HasStart:      opts.HasStart,
+			HasEnd:        opts.HasEnd,
+			IncludeSource: opts.IncludeSource,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, row := range rows {
+			if messageMatches(row, needle) {
+				matched = append(matched, row)
+			}
+		}
+	}
+	ApplyChatInfo(matched, chatInfo)
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].CreateTime != matched[j].CreateTime {
+			return matched[i].CreateTime > matched[j].CreateTime
+		}
+		if matched[i].Seq != matched[j].Seq {
+			return matched[i].Seq > matched[j].Seq
+		}
+		if matched[i].LocalID != matched[j].LocalID {
+			return matched[i].LocalID > matched[j].LocalID
+		}
+		return matched[i].SourceDB < matched[j].SourceDB
+	})
+	total := len(matched)
+	return paginate(matched, opts.Limit, opts.Offset), total, nil
+}
+
 func TableName(username string) string {
 	sum := md5.Sum([]byte(username))
 	return "Msg_" + hex.EncodeToString(sum[:])
+}
+
+func messageMatches(message Message, needle string) bool {
+	if strings.Contains(strings.ToLower(message.Content), needle) {
+		return true
+	}
+	for _, value := range message.ContentDetail {
+		if strings.Contains(strings.ToLower(value), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func tableExists(ctx context.Context, dbPath string, tableName string) (bool, error) {
@@ -334,11 +418,11 @@ func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
 	if msg == nil || mediaResolver == nil {
 		return
 	}
-	kind := mediaKindForMessageType(msg.Type)
+	kind := mediaKindForMessageType(msg.Type, msg.SubType)
 	if kind == "" {
 		return
 	}
-	mediaInfo := mediaResolver.Resolve(kind, msg.ChatUsername, msg.LocalID, msg.CreateTime, msg.RawType, msg.RawContent, msg.IsChatroom)
+	mediaInfo := mediaResolver.Resolve(kind, msg.ChatUsername, msg.LocalID, msg.ServerID, msg.CreateTime, msg.RawType, msg.RawContent, msg.IsChatroom)
 	if mediaInfo.Status == "" {
 		return
 	}
@@ -374,12 +458,19 @@ func enrichMediaDetail(msg *Message, mediaResolver *media.Resolver) {
 	}
 }
 
-func mediaKindForMessageType(msgType int64) string {
+func mediaKindForMessageType(msgType int64, subType int64) string {
 	switch msgType {
 	case messageTypeImage:
 		return "image"
+	case messageTypeVoice:
+		return "voice"
 	case messageTypeVideo:
 		return "video"
+	case messageTypeShare:
+		if subType == messageSubTypeFile {
+			return "file"
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -454,10 +545,10 @@ func decodeContentHex(contentHex string) (string, string) {
 	if err != nil {
 		return "", "invalid_hex"
 	}
-	return decodeContent(raw)
+	return DecodeContent(raw)
 }
 
-func decodeContent(raw []byte) (string, string) {
+func DecodeContent(raw []byte) (string, string) {
 	if len(raw) == 0 {
 		return "", "text"
 	}

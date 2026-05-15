@@ -19,8 +19,16 @@ func TestRootHelpIsDescriptive(t *testing.T) {
 		"Machine-readable usage",
 		"weview init",
 		"weview contacts --help",
+		"weview members --help",
+		"weview sessions --help",
+		"weview unread --help",
+		"weview new-messages --help",
 		"weview messages --help",
+		"weview search --help",
 		"weview timeline --help",
+		"weview favorites --help",
+		"weview articles --help",
+		"weview sns --help",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("root help missing %q:\n%s", want, text)
@@ -194,9 +202,11 @@ func TestContactsHelpIsActionable(t *testing.T) {
 		"--format csv",
 		"--kind friend",
 		"--query TEXT",
+		"--detail",
 		"--limit N",
 		"--count",
 		"Output fields",
+		"Detail-only fields",
 		"Examples for AI/tools",
 	} {
 		if !strings.Contains(text, want) {
@@ -220,7 +230,11 @@ func TestDaemonHelpShowsStatusAndNoQueryAction(t *testing.T) {
 		"No daemon flags are currently supported",
 		"health",
 		"refresh_contacts",
+		"refresh_sessions",
 		"refresh_messages",
+		"refresh_avatars",
+		"refresh_favorites",
+		"refresh_sns",
 		"stop",
 	} {
 		if !strings.Contains(text, want) {
@@ -229,6 +243,80 @@ func TestDaemonHelpShowsStatusAndNoQueryAction(t *testing.T) {
 	}
 	if strings.Contains(text, "list_contacts") {
 		t.Fatalf("daemon help should not advertise list_contacts:\n%s", text)
+	}
+}
+
+func TestSessionsHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"sessions", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview sessions - List recent WeChat sessions",
+		"session/session.db",
+		"--kind all|friend|chatroom|other",
+		"--query TEXT",
+		"unread_count",
+		"last_msg_type",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sessions help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestUnreadHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"unread", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview unread - List unread WeChat sessions",
+		"--limit N",
+		"--refresh",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("unread help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestNewMessagesHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"new-messages", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview new-messages - Return messages newer than the saved checkpoint",
+		"--reset",
+		"24-hour fallback window",
+		"same item schema as messages/timeline",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("new-messages help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSearchHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"search", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview search - Search local WeChat message content",
+		"--query TEXT",
+		"--chat-query TEXT",
+		"same message",
+		"newest-first",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("search help missing %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -288,6 +376,85 @@ func TestUnexpectedDaemonStatusArgumentIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unexpected daemon status argument: extra") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMembersHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"members", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview members - List group members and owner",
+		"--username CHATROOM",
+		"--query TEXT",
+		"owner",
+		"is_owner",
+		"weview members --username 123@chatroom --format json",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("members help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestFavoritesHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"favorites", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview favorites - List WeChat favorites",
+		"--type TYPE",
+		"text, image, voice, video, article, location",
+		"favorite/favorite.db",
+		"source_chat_username",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("favorites help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestArticlesHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"articles", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview articles - List official-account articles and appmsg posts",
+		"--list-accounts",
+		"--username TEXT",
+		"--query TEXT",
+		"message/biz_message caches",
+		"weview articles --query \"AI\" --date today",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("articles help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSNSHelpIsActionable(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"sns", "--help"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"weview sns - Read local WeChat Moments data",
+		"sns feed",
+		"sns search KEYWORD",
+		"sns notifications",
+		"--include-read",
+		"does not expose CDN key/token fields",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sns help missing %q:\n%s", want, text)
+		}
 	}
 }
 

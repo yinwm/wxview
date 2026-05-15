@@ -9,6 +9,7 @@ import (
 
 	"weview/internal/contacts"
 	"weview/internal/messages"
+	"weview/internal/sessions"
 )
 
 func TestWriteContactsJSON(t *testing.T) {
@@ -110,6 +111,33 @@ func TestWriteMessagesJSONL(t *testing.T) {
 	}
 	if strings.Contains(lines[0], `"source"`) {
 		t.Fatalf("source should be omitted by default: %s", lines[0])
+	}
+}
+
+func TestWriteSessionsJSON(t *testing.T) {
+	list := []sessions.Session{{
+		Username:        "room@chatroom",
+		ChatKind:        contacts.KindChatroom,
+		ChatDisplayName: "项目群",
+		UnreadCount:     2,
+		Summary:         "hello",
+		LastTimestamp:   1700000000,
+		Time:            "2023-11-14 22:13:20",
+		LastMsgType:     1,
+	}}
+	var out bytes.Buffer
+	if err := writeSessions(&out, list, "json"); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Count int                `json:"count"`
+		Items []sessions.Session `json:"items"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Count != 1 || len(got.Items) != 1 || got.Items[0].ChatDisplayName != "项目群" || got.Items[0].UnreadCount != 2 {
+		t.Fatalf("unexpected sessions json: %+v", got)
 	}
 }
 

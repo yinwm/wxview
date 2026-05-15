@@ -83,12 +83,16 @@ func NewResolver(dataDir string, cacheDir string, resourceDBs ...string) Resolve
 	}
 }
 
-func (r Resolver) Resolve(kind string, chatUsername string, localID int64, createTime int64, rawType int64, content string, isChatroom bool) Info {
+func (r Resolver) Resolve(kind string, chatUsername string, localID int64, serverID int64, createTime int64, rawType int64, content string, isChatroom bool) Info {
 	switch kind {
 	case "image":
 		return r.ResolveImage(chatUsername, localID, createTime, rawType, content, isChatroom)
 	case "video":
 		return r.ResolveVideo(chatUsername, localID, createTime, rawType, content, isChatroom)
+	case "file":
+		return r.ResolveFile(chatUsername, localID, createTime, rawType, content, isChatroom)
+	case "voice":
+		return r.ResolveVoice(chatUsername, localID, serverID, rawType)
 	default:
 		return Info{}
 	}

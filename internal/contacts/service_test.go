@@ -90,6 +90,74 @@ INSERT INTO contact VALUES (3, 'wxid_friend', 1, '', '', 'Friend', '');
 	}
 }
 
+func TestDetailReturnsRichContactFields(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is required for contact query tests")
+	}
+	db := filepath.Join(t.TempDir(), "contact.db")
+	sql := `
+CREATE TABLE contact (
+  id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT,
+  nick_name TEXT, small_head_url TEXT, big_head_url TEXT, description TEXT,
+  verify_flag INTEGER
+);
+INSERT INTO contact VALUES (9, 'gh_news', 1, 'news_alias', 'News Remark', 'News Nick', 'small', 'big', 'desc text', 8);
+`
+	if out, err := exec.Command("sqlite3", db, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create db: %v: %s", err, out)
+	}
+	got, err := NewService(db).Detail(context.Background(), "gh_news")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "gh_news" || got.Description != "desc text" || got.BigHeadURL != "big" || got.SmallHeadURL != "small" {
+		t.Fatalf("detail missing rich fields: %+v", got)
+	}
+	if got.Kind != KindOther || !got.IsOfficial || got.IsChatroom {
+		t.Fatalf("detail classification = %+v", got)
+	}
+}
+
+func TestMembersReturnsOwnerFirst(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is required for contact query tests")
+	}
+	db := filepath.Join(t.TempDir(), "contact.db")
+	sql := `
+CREATE TABLE contact (
+  id INTEGER, username TEXT, local_type INTEGER, alias TEXT, remark TEXT,
+  nick_name TEXT, big_head_url TEXT
+);
+CREATE TABLE chat_room (id INTEGER, owner TEXT);
+CREATE TABLE chatroom_member (room_id INTEGER, member_id INTEGER);
+INSERT INTO contact VALUES (10, 'room@chatroom', 1, '', 'Room Remark', 'Room Nick', '');
+INSERT INTO contact VALUES (11, 'wxid_owner', 1, 'owner_alias', '', 'Owner Nick', '');
+INSERT INTO contact VALUES (12, 'wxid_member', 1, '', 'Member Remark', 'Member Nick', '');
+INSERT INTO chat_room VALUES (10, 'wxid_owner');
+INSERT INTO chatroom_member VALUES (10, 12);
+INSERT INTO chatroom_member VALUES (10, 11);
+`
+	if out, err := exec.Command("sqlite3", db, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create db: %v: %s", err, out)
+	}
+	got, err := NewService(db).Members(context.Background(), "room@chatroom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "room@chatroom" || got.DisplayName != "Room Remark" || got.Owner != "wxid_owner" || got.OwnerDisplayName != "Owner Nick" {
+		t.Fatalf("unexpected group identity: %+v", got)
+	}
+	if got.Count != 2 || len(got.Members) != 2 {
+		t.Fatalf("member count = %+v", got)
+	}
+	if got.Members[0].Username != "wxid_owner" || !got.Members[0].IsOwner {
+		t.Fatalf("owner should sort first: %+v", got.Members)
+	}
+	if got.Members[1].DisplayName != "Member Remark" {
+		t.Fatalf("member display name = %+v", got.Members[1])
+	}
+}
+
 func TestFilterByKind(t *testing.T) {
 	list := []Contact{
 		{Username: "u1", Kind: KindFriend},

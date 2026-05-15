@@ -228,6 +228,59 @@ func TestListAddsVideoPathAndParsesVideoMetadata(t *testing.T) {
 	}
 }
 
+func TestListNormalizesVOIPDetail(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_31.db")
+	table := TableName("alice")
+	content := `<voipmsg type="VoIPBubbleMsg"><VoIPBubbleMsg><msg><![CDATA[通话时长 04:40]]></msg>
+<room_type>1</room_type>
+<red_dot>false</red_dot>
+<roomid>244884889767588661</roomid>
+<roomkey>0</roomkey>
+<inviteid>1778760291</inviteid>
+<msg_type>100</msg_type>
+<timestamp>1778760581834</timestamp>
+<identity><![CDATA[7102943500496325869]]></identity>
+<duration>0</duration>
+<inviteid64>1778760291</inviteid64>
+<business>1</business>
+<caller_memberid>0</caller_memberid>
+<callee_memberid>1</callee_memberid>
+</VoIPBubbleMsg></voipmsg>`
+	createMessageDB(t, db, table, []messageRow{{
+		LocalID:    1726,
+		SortSeq:    1778760581000,
+		CreateTime: 1778760581,
+		LocalType:  50,
+		Status:     2,
+		Content:    content,
+	}})
+
+	got, err := NewService([]string{db}).List(context.Background(), QueryOptions{Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if got[0].Content != content {
+		t.Fatalf("content was modified:\n got: %q\nwant: %q", got[0].Content, content)
+	}
+	detail := got[0].ContentDetail
+	if detail["type"] != "voip" || detail["text"] != "[语音通话|通话时长 04:40]" {
+		t.Fatalf("unexpected voip detail identity: %+v", detail)
+	}
+	if detail["call_text"] != "通话时长 04:40" || detail["duration_text"] != "04:40" || detail["duration_seconds"] != "280" {
+		t.Fatalf("missing voip duration detail: %+v", detail)
+	}
+	if detail["voip_type"] != "VoIPBubbleMsg" || detail["msg_type"] != "100" || detail["business"] != "1" {
+		t.Fatalf("missing voip message metadata: %+v", detail)
+	}
+	if detail["roomid"] != "" || detail["identity"] != "" || detail["inviteid"] != "" {
+		t.Fatalf("internal voip identifiers should not be copied into content_detail: %+v", detail)
+	}
+}
+
 func TestListFiltersAfterSeq(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "message_0.db")
@@ -400,6 +453,35 @@ func TestListReturnsEmptyWhenTableMissing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("got messages for missing table: %+v", got)
+	}
+}
+
+func TestSearchFiltersDecodedMessageContent(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "message_0.db")
+	table := TableName("alice")
+	createMessageDB(t, db, table, []messageRow{
+		{LocalID: 1, SortSeq: 101, CreateTime: 1700000000, Status: 4, Content: "ordinary note"},
+		{LocalID: 2, SortSeq: 102, CreateTime: 1700000200, Status: 4, ContentBlob: zstdCompress(t, "AI project update")},
+	})
+
+	got, total, err := NewService([]string{db}).Search(context.Background(), SearchOptions{
+		Chats: []ChatInfo{{
+			Username:    "alice",
+			Kind:        "friend",
+			DisplayName: "Alice",
+		}},
+		Query: "project",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(got) != 1 {
+		t.Fatalf("got total=%d len=%d, want 1 result: %+v", total, len(got), got)
+	}
+	if got[0].Content != "AI project update" || got[0].ContentEncoding != "zstd" || got[0].ChatDisplayName != "Alice" {
+		t.Fatalf("unexpected search result: %+v", got[0])
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,11 +20,15 @@ import (
 	"time"
 
 	"weview/internal/app"
+	"weview/internal/articles"
 	"weview/internal/contacts"
 	"weview/internal/daemon"
+	"weview/internal/favorites"
 	"weview/internal/key"
 	"weview/internal/media"
 	"weview/internal/messages"
+	"weview/internal/sessions"
+	"weview/internal/sns"
 	"weview/internal/timeline"
 )
 
@@ -49,10 +55,26 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runDaemon(args[1:], stdout)
 	case "contact", "contacts":
 		return runContacts(ctx, args[1:], stdout)
+	case "members":
+		return runMembers(ctx, args[1:], stdout)
+	case "sessions":
+		return runSessions(ctx, args[1:], stdout)
+	case "unread":
+		return runUnread(ctx, args[1:], stdout)
+	case "new-messages":
+		return runNewMessages(ctx, args[1:], stdout)
 	case "messages":
 		return runMessages(ctx, args[1:], stdout)
+	case "search":
+		return runSearch(ctx, args[1:], stdout)
 	case "timeline":
 		return runTimeline(ctx, args[1:], stdout)
+	case "favorites":
+		return runFavorites(ctx, args[1:], stdout)
+	case "articles":
+		return runArticles(ctx, args[1:], stdout)
+	case "sns":
+		return runSNS(ctx, args[1:], stdout)
 	case "contract":
 		if len(args) > 1 && hasHelp(args[1:]) {
 			contactsUsage(stdout)
@@ -86,8 +108,17 @@ Commands:
                     and save them locally. Usually run once at the beginning.
   weview daemon     Show daemon help.
   weview contacts   List contacts from the decrypted contact cache.
+  weview members    List members and owner for an explicit chatroom username.
+  weview sessions   List recent chats from the decrypted session cache.
+  weview unread     List unread chats from the decrypted session cache.
+  weview new-messages
+                    Return messages newer than the account-scoped checkpoint.
   weview messages   List messages for an explicit username.
+  weview search     Search message content across selected conversations.
   weview timeline   List messages across selected conversations by time.
+  weview favorites  List WeChat favorites from the local favorite cache.
+  weview articles   List official-account articles and appmsg posts.
+  weview sns        Read local Moments feed, search results, or notifications.
   weview help CMD   Show detailed help for a command.
 
 Common examples:
@@ -97,11 +128,21 @@ Common examples:
   weview contacts --kind friend --format csv
   weview contacts --kind friend --query AI --limit 20 --format json
   weview contacts --kind chatroom --format table
+  weview contacts --detail --username wxid_xxx --format json
+  weview members --username 123@chatroom --format json
+  weview sessions --limit 20 --format json
+  weview unread --limit 20 --format json
+  weview new-messages --limit 100 --format json
+  weview search --query "AI" --kind chatroom --date today --format json
   weview contacts --refresh --format json
   weview messages --username wxid_xxx --start "2026-05-01" --end "2026-05-14" --format json
   weview messages --username wxid_xxx --date today --limit 100 --format json
   weview messages --username wxid_xxx --after-seq 1773421286000 --limit 100 --format jsonl
   weview timeline --kind chatroom --query AI --date today --limit 200 --format json
+  weview favorites --type article --limit 20 --format json
+  weview articles --query AI --date today --format json
+  weview sns feed --date today --limit 20 --format json
+  weview sns notifications --include-read --limit 20 --format json
   weview daemon start
   weview daemon status
 
@@ -114,16 +155,26 @@ Machine-readable usage:
   Use --kind chatroom for groups present in the contact table.
 
 Current scope:
-  Supported: macOS WeChat 4.x contact/contact.db and message/message_*.db
-             history reads by explicit username, including local image/video
+  Supported: macOS WeChat 4.x contact/contact.db, message/message_*.db,
+             selected optional data DBs such as favorite/favorite.db,
+             sns/sns.db, and message/biz_message_*.db when keys are available.
+             Message history reads by explicit username include local image/video
              path resolution when media files are available.
   Not included yet: WAL patching, public Web API.
 
-Run:
+  Run:
   weview init --help
   weview contacts --help
+  weview members --help
+  weview sessions --help
+  weview unread --help
+  weview new-messages --help
   weview messages --help
+  weview search --help
   weview timeline --help
+  weview favorites --help
+  weview articles --help
+  weview sns --help
   weview daemon --help`)
 }
 
@@ -135,10 +186,26 @@ func commandHelp(command string, stdout io.Writer, stderr io.Writer) error {
 		daemonUsage(stdout)
 	case "contact", "contacts":
 		contactsUsage(stdout)
+	case "members":
+		membersUsage(stdout)
+	case "sessions":
+		sessionsUsage(stdout)
+	case "unread":
+		unreadUsage(stdout)
+	case "new-messages":
+		newMessagesUsage(stdout)
 	case "messages":
 		messagesUsage(stdout)
+	case "search":
+		searchUsage(stdout)
 	case "timeline":
 		timelineUsage(stdout)
+	case "favorites":
+		favoritesUsage(stdout)
+	case "articles":
+		articlesUsage(stdout)
+	case "sns":
+		snsUsage(stdout)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command: %s", command)
@@ -229,8 +296,9 @@ What it does:
      ~/.weview/cache/<account>/message/
   4. Opens an internal Unix socket:
      ~/.weview/weview.sock
-  5. Watches contact and supported message DB files and refreshes affected
-     caches after a debounce delay when they change.
+  5. Watches contact, session, supported message/media, head_image, favorite,
+     and sns DB files and
+     refreshes affected caches after a debounce delay when they change.
      The current account is resolved from DB files opened by WeChat, so account
      switches while the daemon is running move to the new account cache.
      Unchanged DBs are skipped using ~/.weview/cache/<account>/mtime.json.
@@ -238,7 +306,11 @@ What it does:
 Internal daemon actions:
   health
   refresh_contacts
+  refresh_sessions
   refresh_messages
+  refresh_avatars
+  refresh_favorites
+  refresh_sns
   stop
 
 Notes:
@@ -253,6 +325,7 @@ func contactsUsage(w io.Writer) {
 
 Usage:
   weview contacts --format table|json|jsonl|csv [flags]
+  weview contacts --detail --username USERNAME --format json [flags]
   weview contacts --count [flags]
   weview contacts --help
 
@@ -278,6 +351,8 @@ Flags:
   --query TEXT     Case-insensitive contains search over username, alias,
                    remark, and nick_name.
   --username TEXT  Exact username lookup, e.g. wxid_* or *@chatroom.
+  --detail         With --username, return one rich contact detail object
+                   instead of the default contact-list fields.
   --limit N        Return at most N rows. 0 means no limit.
   --offset N       Skip N rows before returning results. Requires stable sorting
                    for paging; default sort is username.
@@ -299,6 +374,10 @@ Output fields:
   head_url    Avatar image URL.
   kind        friend, chatroom, or other.
 
+Detail-only fields:
+  small_head_url, big_head_url, description, verify_flag, local_type,
+  is_chatroom, and is_official are only returned by --detail.
+
 Examples for humans:
   weview contacts --format table
   weview contacts --kind friend --format table
@@ -312,6 +391,7 @@ Examples for AI/tools:
   weview contacts --kind friend --format csv
   weview contacts --kind friend --query AI --limit 20 --offset 0 --sort username --format json
   weview contacts --username wxid_xxx --format json
+  weview contacts --detail --username wxid_xxx --format json
   weview contacts --kind friend --count
   weview contacts --refresh --format json
 
@@ -319,6 +399,112 @@ Runtime behavior:
   This command always reads contacts from the local decrypted cache.
   If --refresh is used and the daemon is running, it asks the daemon to refresh
   the cache first; otherwise it refreshes the cache in this process.`)
+}
+
+func membersUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview members - List group members and owner from the contact cache
+
+Usage:
+  weview members --username CHATROOM --format table|json|jsonl|csv [flags]
+  weview members --query TEXT --format json [flags]
+  weview members --help
+
+Selection:
+  --username TEXT  Exact chatroom username, e.g. 123@chatroom.
+  --query TEXT     Search chatroom username, alias, remark, and nick_name.
+                   The query must match exactly one chatroom; otherwise use
+                   --username.
+
+Flags:
+  --format table   Human-readable table output.
+  --format json    JSON object with owner, count, and members.
+  --format jsonl   One member JSON object per line.
+  --format csv     Member CSV with header row.
+  --refresh        Refresh contact/contact.db cache before querying.
+
+Output fields:
+  username           Group chat username.
+  display_name       Group display name.
+  owner              Owner username when WeChat exposes it.
+  owner_display_name Owner display name when present in member rows.
+  members            Member rows with username, display_name, alias, remark,
+                     nick_name, kind, and is_owner.
+
+Examples:
+  weview members --username 123@chatroom --format json
+  weview members --query "AI交流群" --format table
+  weview members --username 123@chatroom --refresh --format csv`)
+}
+
+func sessionsUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview sessions - List recent WeChat sessions
+
+Usage:
+  weview sessions --format table|json|jsonl|csv [flags]
+  weview sessions --help
+
+Flags:
+  --format table|json|jsonl|csv
+  --kind all|friend|chatroom|other
+                   Filter by conversation kind after contact metadata is applied.
+  --query TEXT     Search username, display name, sender, or summary.
+  --limit N        Return at most N rows. Default 20. 0 means no limit.
+  --offset N       Skip N rows.
+  --refresh        Refresh session/session.db cache before querying.
+
+Output fields:
+  username, chat_kind, chat_display_name, unread_count, summary,
+  last_timestamp, time, last_msg_type, last_msg_sub_type, last_sender,
+  and last_sender_display_name.
+
+Examples:
+  weview sessions --limit 20 --format table
+  weview sessions --kind chatroom --query AI --format json
+  weview sessions --refresh --format jsonl`)
+}
+
+func unreadUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview unread - List unread WeChat sessions
+
+Usage:
+  weview unread --format table|json|jsonl|csv [flags]
+  weview unread --help
+
+Flags:
+  --format table|json|jsonl|csv
+  --kind all|friend|chatroom|other
+  --query TEXT     Search username, display name, sender, or summary.
+  --limit N        Return at most N rows. Default 20. 0 means no limit.
+  --offset N       Skip N rows.
+  --refresh        Refresh session/session.db cache before querying.
+
+Examples:
+  weview unread --format json
+  weview unread --kind chatroom --limit 20 --format table`)
+}
+
+func newMessagesUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview new-messages - Return messages newer than the saved checkpoint
+
+Usage:
+  weview new-messages --format table|json|jsonl|csv [flags]
+  weview new-messages --help
+
+Flags:
+  --format table|json|jsonl|csv
+  --limit N        Return at most N messages. Default 100. 0 means no limit.
+  --source         Include source DB/table/local row metadata.
+  --reset          Ignore and overwrite the saved checkpoint.
+  --refresh        Refresh session and message-related caches before querying.
+
+Behavior:
+  State is account-scoped under ~/.weview/cache/<account>/state/.
+  First run or --reset uses a 24-hour fallback window instead of returning all
+  historical messages. Results share the same item schema as messages/timeline.
+
+Examples:
+  weview new-messages --limit 100 --format json
+  weview new-messages --reset --format table`)
 }
 
 func messagesUsage(w io.Writer) {
@@ -411,6 +597,48 @@ Runtime behavior:
   If a required message DB key is missing, run sudo weview init first.`)
 }
 
+func searchUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview search - Search local WeChat message content
+
+Usage:
+  weview search --query TEXT --format table|json|jsonl|csv [flags]
+  weview search --help
+
+Required:
+  --query TEXT     Message-content keyword. This searches decoded content and
+                   parsed content_detail values.
+
+Conversation selection:
+  --username TEXT  Search one exact conversation username.
+  --kind all|friend|chatroom|other
+                   Select conversations from the contact cache. Default all.
+  --chat-query TEXT
+                   Filter conversation metadata before searching. Useful with
+                   --kind chatroom. Cannot be combined with --username.
+
+Time range:
+  --date today|yesterday|YYYY-MM-DD
+  --start TIME
+  --end TIME
+
+Other flags:
+  --format table|json|jsonl|csv
+  --limit N        Return at most N rows after global newest-first sorting.
+                   Default 50. 0 means no limit.
+  --offset N       Skip N rows after sorting.
+  --source         Include source DB/table/local row metadata.
+  --refresh        Refresh contact and message caches before querying.
+
+JSON output:
+  --format json returns {"meta": ..., "items": [...]} using the same message
+  item schema as messages and timeline.
+
+Examples:
+  weview search --query "AI" --date today --format json
+  weview search --query "开会" --kind chatroom --chat-query 项目 --limit 50 --format table
+  weview search --query "合同" --username wxid_xxx --start "2026-05-01" --format json`)
+}
+
 func timelineUsage(w io.Writer) {
 	fmt.Fprintln(w, `weview timeline - List WeChat messages across selected conversations
 
@@ -465,6 +693,115 @@ Runtime behavior:
   JSON output includes meta.schema_version and meta.timezone. It also includes
   meta.next_args so AI/tool callers can continue paging without understanding
   the cursor internals.`)
+}
+
+func favoritesUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview favorites - List WeChat favorites from the local cache
+
+Usage:
+  weview favorites --format table|json|jsonl|csv [flags]
+  weview favorites --help
+
+Flags:
+  --format table   Human-readable table output.
+  --format json    JSON object with count and items.
+  --format jsonl   Newline-delimited JSON, one favorite per line.
+  --format csv     CSV with header row.
+  --type TYPE      Filter by text, image, voice, video, article, location,
+                   file, chat_history, note, card, or video_channel.
+  --query TEXT     Search favorite XML/content text.
+  --limit N        Return at most N rows. Default 20. 0 means no limit.
+  --offset N       Skip N rows.
+  --refresh        Refresh favorite/favorite.db cache before querying.
+
+Output fields:
+  JSON items include id, type, type_code, time, timestamp, summary, content,
+  url, content_detail, content_items, from_username, and source_chat_username.
+  content is the readable extracted body when available. content_detail and
+  content_items include safe carrier metadata such as file format, size, local
+  source path when present, ordinary http(s) URL when available, WeChat CDN
+  remote_locator when only CDN metadata is available, md5, message UUID, and
+  media_status. CDN keys are not copied to output.
+
+Examples:
+  weview favorites --type article --limit 20 --format json
+  weview favorites --query "AI" --format table
+  weview favorites --refresh --format jsonl`)
+}
+
+func articlesUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview articles - List official-account articles and appmsg posts
+
+Usage:
+  weview articles --list-accounts --format json [flags]
+  weview articles --username USERNAME --format table|json|jsonl|csv [flags]
+  weview articles --query TEXT --format json [flags]
+  weview articles --help
+
+Selection:
+  --list-accounts  List followed official accounts from contact/contact.db.
+  --username TEXT  Exact official-account username.
+  --query TEXT     Filter official-account username, alias, remark, nick_name,
+                   or description. Without --username, matching accounts are
+                   scanned for appmsg posts.
+
+Time range:
+  --date today|yesterday|YYYY-MM-DD
+                   Select one full local day. Cannot be combined with --start
+                   or --end.
+  --start TIME     Inclusive start time.
+  --end TIME       Inclusive end time.
+
+Flags:
+  --format table   Human-readable table output.
+  --format json    JSON object with count and items.
+  --format jsonl   Newline-delimited JSON, one article per line.
+  --format csv     CSV with header row.
+  --limit N        Return at most N rows after sorting newest first. Default 20.
+  --offset N       Skip N rows.
+  --refresh        Refresh contact and message/biz_message caches before querying.
+
+Examples:
+  weview articles --list-accounts --format json
+  weview articles --username gh_xxx --limit 20 --format json
+  weview articles --query "AI" --date today --format table`)
+}
+
+func snsUsage(w io.Writer) {
+	fmt.Fprintln(w, `weview sns - Read local WeChat Moments data from sns/sns.db
+
+Usage:
+  weview sns feed --format table|json|jsonl|csv [flags]
+  weview sns search KEYWORD --format json [flags]
+  weview sns notifications --format table|json|jsonl|csv [flags]
+  weview sns --help
+
+Subcommands:
+  feed           List local Moments posts cached by WeChat.
+  search         Search Moments post content.
+  notifications List like/comment notifications. Defaults to unread only.
+
+Common flags:
+  --format table|json|jsonl|csv
+  --username TEXT  Filter feed/search by author username.
+  --date today|yesterday|YYYY-MM-DD
+  --start TIME
+  --end TIME
+  --limit N        Default 20. 0 means no limit.
+  --offset N
+  --refresh        Refresh sns/sns.db cache before querying.
+
+notifications flags:
+  --include-read   Include already-read notifications.
+
+Output notes:
+  SNS media output includes URLs, thumbnails, md5, size, and duration metadata
+  when present. It intentionally does not expose CDN key/token fields.
+
+Examples:
+  weview sns feed --date today --limit 20 --format json
+  weview sns search "AI" --start "2026-05-01" --format table
+  weview sns notifications --include-read --limit 20 --format json`)
 }
 
 func hasHelp(args []string) bool {
@@ -747,9 +1084,13 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 	limit := fs.Int("limit", 0, "maximum rows to return; 0 means no limit")
 	offset := fs.Int("offset", 0, "rows to skip before returning results")
 	countOnly := fs.Bool("count", false, "output only count after filters")
+	detail := fs.Bool("detail", false, "return rich detail for --username")
 	refresh := fs.Bool("refresh", false, "refresh decrypted contact cache before listing")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected contacts argument: %s", fs.Arg(0))
 	}
 	if !validFormat(*format) {
 		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
@@ -767,7 +1108,31 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("invalid offset %d: must be >= 0", *offset)
 	}
 
-	list, err := listContacts(ctx, *refresh)
+	cachePath, err := contactCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	if *detail {
+		if strings.TrimSpace(*username) == "" {
+			return fmt.Errorf("--detail requires --username")
+		}
+		item, err := contacts.NewService(cachePath).Detail(ctx, *username)
+		if err != nil {
+			return err
+		}
+		if headPath, ok := headImageCachePath(ctx, *refresh); ok {
+			if target, _, ok := key.HasContactCache(); ok {
+				if cacheDir, err := media.MediaCacheDir(target.Account); err == nil {
+					avatar := media.ResolveAvatar(headPath, item.Username, cacheDir)
+					item.AvatarStatus = avatar.Status
+					item.AvatarPath = avatar.Path
+					item.AvatarReason = avatar.Reason
+				}
+			}
+		}
+		return writeContactDetail(stdout, item, *format)
+	}
+	list, err := contacts.NewService(cachePath).List(ctx)
 	if err != nil {
 		return err
 	}
@@ -789,6 +1154,255 @@ func runContacts(ctx context.Context, args []string, stdout io.Writer) error {
 	return writeContacts(stdout, list, *format)
 }
 
+func runMembers(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		membersUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("members", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	username := fs.String("username", "", "exact chatroom username")
+	query := fs.String("query", "", "chatroom search query")
+	refresh := fs.Bool("refresh", false, "refresh decrypted contact cache before listing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected members argument: %s", fs.Arg(0))
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	usernameValue := strings.TrimSpace(*username)
+	queryValue := strings.TrimSpace(*query)
+	if usernameValue == "" && queryValue == "" {
+		return fmt.Errorf("members requires --username or --query")
+	}
+	if usernameValue != "" && queryValue != "" {
+		return fmt.Errorf("--username cannot be combined with --query")
+	}
+	cachePath, err := contactCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	if queryValue != "" {
+		list, err := contacts.NewService(cachePath).List(ctx)
+		if err != nil {
+			return err
+		}
+		matched := contacts.ApplyQueryOptions(list, contacts.QueryOptions{Kind: contacts.KindChatroom, Query: queryValue})
+		if len(matched) != 1 {
+			return fmt.Errorf("--query matched %d chatrooms; use --username for an exact chatroom", len(matched))
+		}
+		usernameValue = matched[0].Username
+	}
+	result, err := contacts.NewService(cachePath).Members(ctx, usernameValue)
+	if err != nil {
+		return err
+	}
+	return writeGroupMembers(stdout, result, *format)
+}
+
+func runSessions(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		sessionsUsage(stdout)
+		return nil
+	}
+	return runSessionList(ctx, args, stdout, false)
+}
+
+func runUnread(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		unreadUsage(stdout)
+		return nil
+	}
+	return runSessionList(ctx, args, stdout, true)
+}
+
+func runSessionList(ctx context.Context, args []string, stdout io.Writer, unreadOnly bool) error {
+	name := "sessions"
+	if unreadOnly {
+		name = "unread"
+	}
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	kind := fs.String("kind", contacts.KindAll, "all, friend, chatroom, or other")
+	query := fs.String("query", "", "search username, display name, sender, or summary")
+	limit := fs.Int("limit", 20, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip")
+	refresh := fs.Bool("refresh", false, "refresh decrypted session cache before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected %s argument: %s", name, fs.Arg(0))
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if !validKind(*kind) {
+		return fmt.Errorf("invalid kind %q: use all, friend, chatroom, or other", *kind)
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	cachePath, err := sessionCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	list, err := sessions.NewService(cachePath).List(ctx, sessions.QueryOptions{UnreadOnly: unreadOnly})
+	if err != nil {
+		return err
+	}
+	sessions.ApplyChatInfo(list, loadExistingChatInfoMap(ctx))
+	list = sessions.ApplyQueryOptions(list, sessions.QueryOptions{
+		Kind:   *kind,
+		Query:  *query,
+		Limit:  *limit,
+		Offset: *offset,
+	})
+	return writeSessions(stdout, list, *format)
+}
+
+func runNewMessages(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		newMessagesUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("new-messages", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	limit := fs.Int("limit", 100, "maximum messages to return; 0 means no limit")
+	includeSource := fs.Bool("source", false, "include source DB/table/local row metadata")
+	reset := fs.Bool("reset", false, "ignore and overwrite the saved checkpoint")
+	refresh := fs.Bool("refresh", false, "refresh session and message caches before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected new-messages argument: %s", fs.Arg(0))
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if *limit < 0 {
+		return fmt.Errorf("invalid limit %d: must be >= 0", *limit)
+	}
+	target, sessionPath, err := sessionCacheTargetPath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	statePath, err := newMessagesStatePath(target.Account)
+	if err != nil {
+		return err
+	}
+	state, loaded, err := loadNewMessagesState(statePath)
+	if err != nil {
+		return err
+	}
+	if *reset {
+		state = map[string]int64{}
+		loaded = false
+	}
+	fallback := time.Now().Add(-24 * time.Hour).Unix()
+	sessionList, err := sessions.NewService(sessionPath).List(ctx, sessions.QueryOptions{})
+	if err != nil {
+		return err
+	}
+	currentState := make(map[string]int64, len(sessionList))
+	changedSince := map[string]int64{}
+	for _, item := range sessionList {
+		if item.Username == "" || item.LastTimestamp <= 0 {
+			continue
+		}
+		currentState[item.Username] = item.LastTimestamp
+		since := fallback
+		if loaded {
+			if previous, ok := state[item.Username]; ok {
+				since = previous
+			}
+		}
+		if item.LastTimestamp > since {
+			changedSince[item.Username] = since
+		}
+	}
+
+	cachePaths, err := messageCachePaths(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	service := messages.NewService(cachePaths)
+	var list []messages.Message
+	for username, since := range changedSince {
+		rows, err := service.List(ctx, messages.QueryOptions{
+			Username:      username,
+			Start:         since + 1,
+			HasStart:      true,
+			IncludeSource: *includeSource,
+		})
+		if err != nil {
+			return err
+		}
+		list = append(list, rows...)
+	}
+	messages.ApplyChatInfo(list, loadExistingChatInfoMap(ctx))
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].CreateTime != list[j].CreateTime {
+			return list[i].CreateTime < list[j].CreateTime
+		}
+		if list[i].Seq != list[j].Seq {
+			return list[i].Seq < list[j].Seq
+		}
+		return list[i].ID < list[j].ID
+	})
+	page, _ := trimMessagePage(list, *limit)
+
+	newState := copyState(currentState)
+	for username, since := range changedSince {
+		newState[username] = since
+	}
+	for _, item := range page {
+		if item.ChatUsername == "" || item.CreateTime <= 0 {
+			continue
+		}
+		if item.CreateTime > newState[item.ChatUsername] {
+			newState[item.ChatUsername] = item.CreateTime
+		}
+	}
+	if err := saveNewMessagesState(statePath, newState); err != nil {
+		return err
+	}
+	if len(page) > 0 {
+		target, err := key.DiscoverContactDB()
+		if err != nil {
+			return err
+		}
+		cacheDir, err := media.MediaCacheDir(target.Account)
+		if err != nil {
+			return err
+		}
+		resolver := newMediaResolver(target, cacheDir)
+		messages.EnrichMediaDetails(page, &resolver)
+	}
+	if *format == "json" {
+		meta := newMessagesMeta{
+			SchemaVersion: messageEnvelopeSchemaVersion,
+			Timezone:      localTimezoneName(),
+			Mode:          "new_messages",
+			FirstRun:      !loaded,
+			Reset:         *reset,
+			Limit:         *limit,
+			Returned:      len(page),
+			ChangedChats:  len(changedSince),
+			StatePath:     statePath,
+		}
+		return writeMessageEnvelope(stdout, meta, page)
+	}
+	return writeMessages(stdout, page, *format, *includeSource)
+}
+
 func runMessages(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || hasHelp(args) {
 		messagesUsage(stdout)
@@ -808,6 +1422,9 @@ func runMessages(ctx context.Context, args []string, stdout io.Writer) error {
 	refresh := fs.Bool("refresh", false, "refresh decrypted message caches before listing")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected search argument: %s", fs.Arg(0))
 	}
 	if !validFormat(*format) {
 		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
@@ -882,6 +1499,106 @@ func runMessages(ctx context.Context, args []string, stdout io.Writer) error {
 			meta.NextArgs = buildMessagesNextArgs(usernameValue, start, hasStart, end, hasEnd, meta.NextAfterSeq, *limit, *includeSource)
 		}
 		return writeMessageEnvelope(stdout, meta, page)
+	}
+	return writeMessages(stdout, list, *format, *includeSource)
+}
+
+func runSearch(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		searchUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("search", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	query := fs.String("query", "", "message-content keyword")
+	kind := fs.String("kind", contacts.KindAll, "all, friend, chatroom, or other")
+	chatQuery := fs.String("chat-query", "", "conversation metadata filter")
+	username := fs.String("username", "", "exact WeChat username")
+	dateText := fs.String("date", "", "today, yesterday, or YYYY-MM-DD")
+	startText := fs.String("start", "", "inclusive start time")
+	endText := fs.String("end", "", "inclusive end time")
+	limit := fs.Int("limit", 50, "maximum rows to return after sorting; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip after sorting")
+	includeSource := fs.Bool("source", false, "include source DB/table/local row metadata")
+	refresh := fs.Bool("refresh", false, "refresh contact and message caches before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if !validKind(*kind) {
+		return fmt.Errorf("invalid kind %q: use all, friend, chatroom, or other", *kind)
+	}
+	if strings.TrimSpace(*query) == "" {
+		return fmt.Errorf("--query is required")
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	usernameValue := strings.TrimSpace(*username)
+	chatQueryValue := strings.TrimSpace(*chatQuery)
+	if usernameValue != "" && chatQueryValue != "" {
+		return fmt.Errorf("--username cannot be combined with --chat-query")
+	}
+	start, end, hasStart, hasEnd, err := parseMessageRange(*dateText, *startText, *endText)
+	if err != nil {
+		return err
+	}
+	chats, matchedChats, err := selectSearchChats(ctx, usernameValue, *kind, chatQueryValue, *refresh)
+	if err != nil {
+		return err
+	}
+	cachePaths, err := messageCachePaths(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	service := messages.NewService(cachePaths)
+	list, total, err := service.Search(ctx, messages.SearchOptions{
+		Chats:         chats,
+		Query:         strings.TrimSpace(*query),
+		Start:         start,
+		End:           end,
+		HasStart:      hasStart,
+		HasEnd:        hasEnd,
+		IncludeSource: *includeSource,
+		Limit:         *limit,
+		Offset:        *offset,
+	})
+	if err != nil {
+		return err
+	}
+	if len(list) > 0 {
+		target, err := key.DiscoverContactDB()
+		if err != nil {
+			return err
+		}
+		cacheDir, err := media.MediaCacheDir(target.Account)
+		if err != nil {
+			return err
+		}
+		resolver := newMediaResolver(target, cacheDir)
+		messages.EnrichMediaDetails(list, &resolver)
+	}
+	if *format == "json" {
+		meta := searchMeta{
+			SchemaVersion: messageEnvelopeSchemaVersion,
+			Timezone:      localTimezoneName(),
+			Mode:          "search",
+			Query:         strings.TrimSpace(*query),
+			Kind:          *kind,
+			ChatQuery:     chatQueryValue,
+			Username:      usernameValue,
+			Start:         formatMetaTime(start, hasStart),
+			End:           formatMetaTime(end, hasEnd),
+			Limit:         *limit,
+			Offset:        *offset,
+			Returned:      len(list),
+			TotalMatches:  total,
+			MatchedChats:  matchedChats,
+		}
+		return writeMessageEnvelope(stdout, meta, list)
 	}
 	return writeMessages(stdout, list, *format, *includeSource)
 }
@@ -1007,6 +1724,218 @@ func runTimeline(ctx context.Context, args []string, stdout io.Writer) error {
 	return writeMessages(stdout, result.Items, *format, *includeSource)
 }
 
+func runFavorites(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		favoritesUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("favorites", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	favType := fs.String("type", "", "text, image, article, card, or video")
+	query := fs.String("query", "", "contains search over favorite content")
+	limit := fs.Int("limit", 20, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip before returning results")
+	refresh := fs.Bool("refresh", false, "refresh decrypted favorite cache before listing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	target, cachePath, err := favoriteCacheTargetPath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	items, err := favorites.NewServiceWithDataDir(cachePath, target.DataDir).List(ctx, favorites.QueryOptions{
+		Type:   *favType,
+		Query:  *query,
+		Limit:  *limit,
+		Offset: *offset,
+	})
+	if err != nil {
+		return err
+	}
+	return writeFavorites(stdout, items, *format)
+}
+
+func runArticles(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		articlesUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("articles", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	listAccounts := fs.Bool("list-accounts", false, "list official accounts")
+	username := fs.String("username", "", "exact official-account username")
+	query := fs.String("query", "", "account metadata search query")
+	dateText := fs.String("date", "", "today, yesterday, or YYYY-MM-DD")
+	startText := fs.String("start", "", "inclusive start time")
+	endText := fs.String("end", "", "inclusive end time")
+	limit := fs.Int("limit", 20, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip before returning results")
+	refresh := fs.Bool("refresh", false, "refresh contact and message caches before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	start, end, hasStart, hasEnd, err := parseMessageRange(*dateText, *startText, *endText)
+	if err != nil {
+		return err
+	}
+	contactPath, err := contactCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	service := articles.NewService(contactPath, nil)
+	if *listAccounts {
+		accounts, err := service.Accounts(ctx, *query)
+		if err != nil {
+			return err
+		}
+		return writeArticleAccounts(stdout, accounts, *format)
+	}
+	messagePaths, err := articleCachePaths(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	service = articles.NewService(contactPath, messagePaths)
+	items, err := service.List(ctx, articles.QueryOptions{
+		Username: strings.TrimSpace(*username),
+		Query:    strings.TrimSpace(*query),
+		Start:    start,
+		End:      end,
+		HasStart: hasStart,
+		HasEnd:   hasEnd,
+		Limit:    *limit,
+		Offset:   *offset,
+	})
+	if err != nil {
+		return err
+	}
+	return writeArticles(stdout, items, *format)
+}
+
+func runSNS(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 || hasHelp(args) {
+		snsUsage(stdout)
+		return nil
+	}
+	switch args[0] {
+	case "feed":
+		return runSNSFeed(ctx, args[1:], stdout, "")
+	case "search":
+		query := ""
+		rest := args[1:]
+		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+			query = rest[0]
+			rest = rest[1:]
+		}
+		return runSNSFeed(ctx, rest, stdout, query)
+	case "notifications":
+		return runSNSNotifications(ctx, args[1:], stdout)
+	default:
+		return fmt.Errorf("unknown sns command: %s", args[0])
+	}
+}
+
+func runSNSFeed(ctx context.Context, args []string, stdout io.Writer, positionalQuery string) error {
+	fs := flag.NewFlagSet("sns feed", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	username := fs.String("username", "", "author username")
+	query := fs.String("query", positionalQuery, "post content search query")
+	dateText := fs.String("date", "", "today, yesterday, or YYYY-MM-DD")
+	startText := fs.String("start", "", "inclusive start time")
+	endText := fs.String("end", "", "inclusive end time")
+	limit := fs.Int("limit", 20, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip before returning results")
+	refresh := fs.Bool("refresh", false, "refresh decrypted sns cache before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	start, end, hasStart, hasEnd, err := parseMessageRange(*dateText, *startText, *endText)
+	if err != nil {
+		return err
+	}
+	cachePath, err := snsCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	items, err := sns.NewService(cachePath).Feed(ctx, sns.QueryOptions{
+		Username: strings.TrimSpace(*username),
+		Query:    strings.TrimSpace(*query),
+		Start:    start,
+		End:      end,
+		HasStart: hasStart,
+		HasEnd:   hasEnd,
+		Limit:    *limit,
+		Offset:   *offset,
+	})
+	if err != nil {
+		return err
+	}
+	return writeSNSPosts(stdout, items, *format)
+}
+
+func runSNSNotifications(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("sns notifications", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	format := fs.String("format", "table", "table, json, jsonl, or csv")
+	dateText := fs.String("date", "", "today, yesterday, or YYYY-MM-DD")
+	startText := fs.String("start", "", "inclusive start time")
+	endText := fs.String("end", "", "inclusive end time")
+	limit := fs.Int("limit", 20, "maximum rows to return; 0 means no limit")
+	offset := fs.Int("offset", 0, "rows to skip before returning results")
+	includeRead := fs.Bool("include-read", false, "include already-read notifications")
+	refresh := fs.Bool("refresh", false, "refresh decrypted sns cache before querying")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !validFormat(*format) {
+		return fmt.Errorf("invalid format %q: use table, json, jsonl, or csv", *format)
+	}
+	if *limit < 0 || *offset < 0 {
+		return fmt.Errorf("limit and offset must be >= 0")
+	}
+	start, end, hasStart, hasEnd, err := parseMessageRange(*dateText, *startText, *endText)
+	if err != nil {
+		return err
+	}
+	cachePath, err := snsCachePath(ctx, *refresh)
+	if err != nil {
+		return err
+	}
+	items, err := sns.NewService(cachePath).Notifications(ctx, sns.QueryOptions{
+		Start:       start,
+		End:         end,
+		HasStart:    hasStart,
+		HasEnd:      hasEnd,
+		Limit:       *limit,
+		Offset:      *offset,
+		IncludeRead: *includeRead,
+	})
+	if err != nil {
+		return err
+	}
+	return writeSNSNotifications(stdout, items, *format)
+}
+
 type messagesMeta struct {
 	SchemaVersion int      `json:"schema_version"`
 	Timezone      string   `json:"timezone"`
@@ -1038,9 +1967,67 @@ type timelineMeta struct {
 	NextArgs      []string `json:"next_args,omitempty"`
 }
 
+type searchMeta struct {
+	SchemaVersion int    `json:"schema_version"`
+	Timezone      string `json:"timezone"`
+	Mode          string `json:"mode"`
+	Query         string `json:"query"`
+	Kind          string `json:"kind,omitempty"`
+	ChatQuery     string `json:"chat_query,omitempty"`
+	Username      string `json:"username,omitempty"`
+	Start         string `json:"start"`
+	End           string `json:"end"`
+	Limit         int    `json:"limit"`
+	Offset        int    `json:"offset"`
+	Returned      int    `json:"returned"`
+	TotalMatches  int    `json:"total_matches"`
+	MatchedChats  int    `json:"matched_chats"`
+}
+
+type newMessagesMeta struct {
+	SchemaVersion int    `json:"schema_version"`
+	Timezone      string `json:"timezone"`
+	Mode          string `json:"mode"`
+	FirstRun      bool   `json:"first_run"`
+	Reset         bool   `json:"reset"`
+	Limit         int    `json:"limit"`
+	Returned      int    `json:"returned"`
+	ChangedChats  int    `json:"changed_chats"`
+	StatePath     string `json:"state_path"`
+}
+
 type messageEnvelope struct {
 	Meta  any                `json:"meta"`
 	Items []messages.Message `json:"items"`
+}
+
+func selectSearchChats(ctx context.Context, username string, kind string, query string, refresh bool) ([]messages.ChatInfo, int, error) {
+	if username != "" {
+		if refresh {
+			if err := refreshContactCache(ctx); err != nil {
+				return nil, 0, err
+			}
+		}
+		info := loadExistingChatInfoMap(ctx)[username]
+		if strings.TrimSpace(info.Username) == "" {
+			info = messages.ChatInfo{Username: username, Kind: messages.ChatKindUnknown, DisplayName: username}
+		}
+		return []messages.ChatInfo{info}, 1, nil
+	}
+	list, err := listContacts(ctx, refresh)
+	if err != nil {
+		return nil, 0, err
+	}
+	selected := contacts.ApplyQueryOptions(list, contacts.QueryOptions{
+		Kind:  kind,
+		Query: query,
+		Sort:  "username",
+	})
+	chats := make([]messages.ChatInfo, 0, len(selected))
+	for _, contact := range selected {
+		chats = append(chats, chatInfoFromContact(contact))
+	}
+	return chats, len(chats), nil
 }
 
 func selectTimelineChats(ctx context.Context, username string, kind string, query string, kindProvided bool, refresh bool) ([]messages.ChatInfo, int, error) {
@@ -1153,6 +2140,45 @@ func refreshContactCache(ctx context.Context) error {
 	return err
 }
 
+func sessionCachePath(ctx context.Context, refresh bool) (string, error) {
+	_, path, err := sessionCacheTargetPath(ctx, refresh)
+	return path, err
+}
+
+func sessionCacheTargetPath(ctx context.Context, refresh bool) (key.TargetDB, string, error) {
+	if refresh {
+		return refreshSessionCache(ctx)
+	}
+	if target, path, ok := key.SessionCachePathIfExists(); ok {
+		return target, path, nil
+	}
+	res, path, err := key.EnsureSessionCache(ctx)
+	return res.Target, path, err
+}
+
+func refreshSessionCache(ctx context.Context) (key.TargetDB, string, error) {
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return key.TargetDB{}, "", err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: time.Minute}
+	if client.Healthy(ctx) {
+		if _, err := client.Call(ctx, daemon.ActionRefreshSessions); err != nil {
+			if !isUnknownDaemonAction(err) {
+				return key.TargetDB{}, "", err
+			}
+			res, path, err := key.EnsureSessionCache(ctx)
+			return res.Target, path, err
+		}
+		if target, path, ok := key.SessionCachePathIfExists(); ok {
+			return target, path, nil
+		}
+		return key.TargetDB{}, "", fmt.Errorf("session cache was not found after daemon refresh")
+	}
+	res, path, err := key.EnsureSessionCache(ctx)
+	return res.Target, path, err
+}
+
 func messageCachePaths(ctx context.Context, refresh bool) ([]string, error) {
 	if refresh {
 		if err := refreshMessageCaches(ctx); err != nil {
@@ -1187,14 +2213,126 @@ func refreshMessageCaches(ctx context.Context) error {
 		_, err := client.Call(ctx, daemon.ActionRefreshMessages)
 		return err
 	}
-	_, err = key.EnsureMessageCaches(ctx)
+	_, err = key.EnsureMessageRelatedCaches(ctx)
 	return err
+}
+
+func articleCachePaths(ctx context.Context, refresh bool) ([]string, error) {
+	if refresh {
+		if err := refreshMessageCaches(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return key.ArticleCachePaths(ctx)
+}
+
+func favoriteCachePath(ctx context.Context, refresh bool) (string, error) {
+	_, path, err := favoriteCacheTargetPath(ctx, refresh)
+	return path, err
+}
+
+func favoriteCacheTargetPath(ctx context.Context, refresh bool) (key.TargetDB, string, error) {
+	if refresh {
+		return refreshFavoriteCache(ctx)
+	}
+	if target, path, ok := key.FavoriteCachePathIfExists(); ok {
+		return target, path, nil
+	}
+	res, path, err := key.EnsureFavoriteCache(ctx)
+	return res.Target, path, err
+}
+
+func refreshFavoriteCache(ctx context.Context) (key.TargetDB, string, error) {
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return key.TargetDB{}, "", err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: time.Minute}
+	if client.Healthy(ctx) {
+		if _, err := client.Call(ctx, daemon.ActionRefreshFavorites); err != nil {
+			if !isUnknownDaemonAction(err) {
+				return key.TargetDB{}, "", err
+			}
+			res, path, err := key.EnsureFavoriteCache(ctx)
+			return res.Target, path, err
+		}
+		if target, path, ok := key.FavoriteCachePathIfExists(); ok {
+			return target, path, nil
+		}
+		return key.TargetDB{}, "", fmt.Errorf("favorite cache was not found after daemon refresh")
+	}
+	res, path, err := key.EnsureFavoriteCache(ctx)
+	return res.Target, path, err
+}
+
+func snsCachePath(ctx context.Context, refresh bool) (string, error) {
+	if refresh {
+		return refreshSNSCache(ctx)
+	}
+	if _, path, ok := key.SNSCachePathIfExists(); ok {
+		return path, nil
+	}
+	_, path, err := key.EnsureSNSCache(ctx)
+	return path, err
+}
+
+func headImageCachePath(ctx context.Context, refresh bool) (string, bool) {
+	if refresh {
+		socketPath, err := app.SocketPath()
+		if err == nil {
+			client := daemon.Client{SocketPath: socketPath, Timeout: time.Minute}
+			if client.Healthy(ctx) {
+				_, _ = client.Call(ctx, daemon.ActionRefreshAvatars)
+			}
+		}
+		if _, path, err := key.EnsureHeadImageCache(ctx); err == nil {
+			return path, true
+		}
+		return "", false
+	}
+	if _, path, ok := key.HeadImageCachePathIfExists(); ok {
+		return path, true
+	}
+	if _, path, err := key.EnsureHeadImageCache(ctx); err == nil {
+		return path, true
+	}
+	return "", false
+}
+
+func refreshSNSCache(ctx context.Context) (string, error) {
+	socketPath, err := app.SocketPath()
+	if err != nil {
+		return "", err
+	}
+	client := daemon.Client{SocketPath: socketPath, Timeout: time.Minute}
+	if client.Healthy(ctx) {
+		if _, err := client.Call(ctx, daemon.ActionRefreshSNS); err != nil {
+			if !isUnknownDaemonAction(err) {
+				return "", err
+			}
+			_, path, err := key.EnsureSNSCache(ctx)
+			return path, err
+		}
+		if _, path, ok := key.SNSCachePathIfExists(); ok {
+			return path, nil
+		}
+		return "", fmt.Errorf("sns cache was not found after daemon refresh")
+	}
+	_, path, err := key.EnsureSNSCache(ctx)
+	return path, err
+}
+
+func isUnknownDaemonAction(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unknown daemon action")
 }
 
 func newMediaResolver(target key.TargetDB, cacheDir string) media.Resolver {
 	resourceDBs := []string{}
 	if path, err := key.CachePath(target.Account, "message/message_resource.db"); err == nil {
 		resourceDBs = append(resourceDBs, path)
+	}
+	if paths, _, err := key.MediaCachePaths(); err == nil {
+		resourceDBs = append(resourceDBs, paths...)
 	}
 	return media.NewResolver(target.DataDir, cacheDir, resourceDBs...)
 }
@@ -1448,9 +2586,79 @@ func buildTimelineNextArgs(username string, kind string, query string, start str
 	return args
 }
 
+type newMessagesState struct {
+	Sessions map[string]int64 `json:"sessions"`
+}
+
+func newMessagesStatePath(account string) (string, error) {
+	path, err := app.CacheDBPath(account, "state/new_messages.json")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	if err := app.ChownForSudo(filepath.Dir(path)); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func loadNewMessagesState(path string) (map[string]int64, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]int64{}, false, nil
+		}
+		return nil, false, err
+	}
+	var state newMessagesState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, false, fmt.Errorf("parse new-messages state: %w", err)
+	}
+	if state.Sessions == nil {
+		state.Sessions = map[string]int64{}
+	}
+	return state.Sessions, true, nil
+}
+
+func saveNewMessagesState(path string, sessions map[string]int64) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(newMessagesState{Sessions: sessions}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	if err := app.ChownForSudo(path); err != nil {
+		return err
+	}
+	return app.ChownForSudo(filepath.Dir(path))
+}
+
+func copyState(in map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 var defaultContactFields = []string{"username", "alias", "remark", "nick_name", "head_url", "kind"}
+var contactDetailFields = []string{"username", "alias", "remark", "nick_name", "head_url", "small_head_url", "big_head_url", "description", "verify_flag", "local_type", "kind", "is_chatroom", "is_official", "avatar_status", "avatar_path", "avatar_reason"}
+var memberFields = []string{"username", "display_name", "alias", "remark", "nick_name", "kind", "is_owner"}
+var sessionFields = []string{"username", "chat_kind", "chat_display_name", "unread_count", "summary", "last_timestamp", "time", "last_msg_type", "last_msg_sub_type", "last_sender", "last_sender_display_name"}
 var defaultMessageFields = []string{"id", "chat_username", "chat_kind", "chat_display_name", "chat_alias", "chat_remark", "chat_nick_name", "from_username", "direction", "is_self", "is_chatroom", "seq", "server_id", "create_time", "time", "type", "sub_type", "content", "content_detail", "content_encoding"}
 var sourceMessageFields = []string{"source_db", "source_table", "source_local_id", "source_raw_type", "source_status", "source_real_sender_id"}
+var favoriteFields = []string{"id", "type", "type_code", "time", "timestamp", "summary", "content", "url", "content_detail", "from_username", "source_chat_username"}
+var articleAccountFields = []string{"username", "alias", "remark", "nick_name", "description", "head_url"}
+var articleFields = []string{"id", "account_username", "account_display_name", "time", "timestamp", "type", "text", "title", "desc", "url", "source_username", "source_display_name", "nickname", "message_id"}
+var snsPostFields = []string{"id", "author_username", "time", "timestamp", "content", "location", "media_count"}
+var snsNotificationFields = []string{"id", "type", "from_username", "from_nick_name", "content", "feed_id", "feed_author_username", "feed_preview", "time", "timestamp"}
 
 func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 	switch format {
@@ -1489,6 +2697,92 @@ func writeContacts(w io.Writer, list []contacts.Contact, format string) error {
 			fmt.Fprintln(tw, strings.Join(values, "\t"))
 		}
 		return tw.Flush()
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeContactDetail(w io.Writer, item contacts.Detail, format string) error {
+	switch format {
+	case "json":
+		enc := jsonEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(item)
+	case "jsonl":
+		return jsonEncoder(w).Encode(item)
+	case "csv":
+		cw := csv.NewWriter(w)
+		if err := cw.Write(contactDetailFields); err != nil {
+			return err
+		}
+		if err := cw.Write(contactDetailValues(item)); err != nil {
+			return err
+		}
+		cw.Flush()
+		return cw.Error()
+	case "table":
+		return writeKeyValues(w, contactDetailFields, contactDetailValues(item))
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeGroupMembers(w io.Writer, result contacts.GroupMembers, format string) error {
+	switch format {
+	case "json":
+		enc := jsonEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	case "jsonl":
+		enc := jsonEncoder(w)
+		for _, member := range result.Members {
+			if err := enc.Encode(member); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "csv":
+		cw := csv.NewWriter(w)
+		if err := cw.Write(memberFields); err != nil {
+			return err
+		}
+		for _, member := range result.Members {
+			if err := cw.Write(memberValues(member)); err != nil {
+				return err
+			}
+		}
+		cw.Flush()
+		return cw.Error()
+	case "table":
+		fmt.Fprintf(w, "group: %s\n", result.DisplayName)
+		fmt.Fprintf(w, "username: %s\n", result.Username)
+		fmt.Fprintf(w, "owner: %s\n", result.OwnerDisplayName)
+		fmt.Fprintf(w, "count: %d\n", result.Count)
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, strings.ToUpper(strings.Join(memberFields, "\t")))
+		for _, member := range result.Members {
+			values := memberValues(member)
+			for i := range values {
+				values[i] = cleanCell(values[i])
+			}
+			fmt.Fprintln(tw, strings.Join(values, "\t"))
+		}
+		return tw.Flush()
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeSessions(w io.Writer, list []sessions.Session, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, sessionFields, len(list), func(i int) []string { return sessionValues(list[i]) })
+	case "table":
+		return writeTable(w, sessionFields, len(list), func(i int) []string { return sessionValues(list[i]) })
 	default:
 		return fmt.Errorf("unsupported format: %s", format)
 	}
@@ -1543,6 +2837,124 @@ func writeMessageEnvelope(w io.Writer, meta any, list []messages.Message) error 
 	return enc.Encode(messageEnvelope{Meta: meta, Items: list})
 }
 
+func writeFavorites(w io.Writer, list []favorites.Item, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, favoriteFields, len(list), func(i int) []string { return favoriteValues(list[i]) })
+	case "table":
+		return writeTable(w, favoriteFields, len(list), func(i int) []string { return favoriteValues(list[i]) })
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeArticleAccounts(w io.Writer, list []articles.Account, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, articleAccountFields, len(list), func(i int) []string { return articleAccountValues(list[i]) })
+	case "table":
+		return writeTable(w, articleAccountFields, len(list), func(i int) []string { return articleAccountValues(list[i]) })
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeArticles(w io.Writer, list []articles.Article, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, articleFields, len(list), func(i int) []string { return articleValues(list[i]) })
+	case "table":
+		return writeTable(w, articleFields, len(list), func(i int) []string { return articleValues(list[i]) })
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeSNSPosts(w io.Writer, list []sns.Post, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, snsPostFields, len(list), func(i int) []string { return snsPostValues(list[i]) })
+	case "table":
+		return writeTable(w, snsPostFields, len(list), func(i int) []string { return snsPostValues(list[i]) })
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeSNSNotifications(w io.Writer, list []sns.Notification, format string) error {
+	switch format {
+	case "json":
+		return writeItemsObject(w, list)
+	case "jsonl":
+		return writeJSONLines(w, list)
+	case "csv":
+		return writeRows(w, snsNotificationFields, len(list), func(i int) []string { return snsNotificationValues(list[i]) })
+	case "table":
+		return writeTable(w, snsNotificationFields, len(list), func(i int) []string { return snsNotificationValues(list[i]) })
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func writeItemsObject[T any](w io.Writer, list []T) error {
+	enc := jsonEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]any{"count": len(list), "items": list})
+}
+
+func writeJSONLines[T any](w io.Writer, list []T) error {
+	enc := jsonEncoder(w)
+	for _, item := range list {
+		if err := enc.Encode(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeRows(w io.Writer, fields []string, n int, valueAt func(int) []string) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write(fields); err != nil {
+		return err
+	}
+	for i := 0; i < n; i++ {
+		if err := cw.Write(valueAt(i)); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+func writeTable(w io.Writer, fields []string, n int, valueAt func(int) []string) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, strings.ToUpper(strings.Join(fields, "\t")))
+	for i := 0; i < n; i++ {
+		values := valueAt(i)
+		for i := range values {
+			values[i] = cleanCell(values[i])
+		}
+		fmt.Fprintln(tw, strings.Join(values, "\t"))
+	}
+	return tw.Flush()
+}
+
 func messageFields(includeSource bool) []string {
 	fields := append([]string{}, defaultMessageFields...)
 	if includeSource {
@@ -1579,6 +2991,191 @@ func contactValues(contact contacts.Contact) []string {
 		values = append(values, contactValue(contact, field))
 	}
 	return values
+}
+
+func contactDetailValues(item contacts.Detail) []string {
+	values := make([]string, 0, len(contactDetailFields))
+	for _, field := range contactDetailFields {
+		switch field {
+		case "username":
+			values = append(values, item.Username)
+		case "alias":
+			values = append(values, item.Alias)
+		case "remark":
+			values = append(values, item.Remark)
+		case "nick_name":
+			values = append(values, item.NickName)
+		case "head_url":
+			values = append(values, item.HeadURL)
+		case "small_head_url":
+			values = append(values, item.SmallHeadURL)
+		case "big_head_url":
+			values = append(values, item.BigHeadURL)
+		case "description":
+			values = append(values, item.Description)
+		case "verify_flag":
+			values = append(values, strconv.Itoa(item.VerifyFlag))
+		case "local_type":
+			values = append(values, strconv.Itoa(item.LocalType))
+		case "kind":
+			values = append(values, item.Kind)
+		case "is_chatroom":
+			values = append(values, strconv.FormatBool(item.IsChatroom))
+		case "is_official":
+			values = append(values, strconv.FormatBool(item.IsOfficial))
+		case "avatar_status":
+			values = append(values, item.AvatarStatus)
+		case "avatar_path":
+			values = append(values, item.AvatarPath)
+		case "avatar_reason":
+			values = append(values, item.AvatarReason)
+		default:
+			values = append(values, "")
+		}
+	}
+	return values
+}
+
+func memberValues(member contacts.Member) []string {
+	values := make([]string, 0, len(memberFields))
+	for _, field := range memberFields {
+		switch field {
+		case "username":
+			values = append(values, member.Username)
+		case "display_name":
+			values = append(values, member.DisplayName)
+		case "alias":
+			values = append(values, member.Alias)
+		case "remark":
+			values = append(values, member.Remark)
+		case "nick_name":
+			values = append(values, member.NickName)
+		case "kind":
+			values = append(values, member.Kind)
+		case "is_owner":
+			values = append(values, strconv.FormatBool(member.IsOwner))
+		default:
+			values = append(values, "")
+		}
+	}
+	return values
+}
+
+func sessionValues(item sessions.Session) []string {
+	return []string{
+		item.Username,
+		item.ChatKind,
+		item.ChatDisplayName,
+		strconv.FormatInt(item.UnreadCount, 10),
+		item.Summary,
+		strconv.FormatInt(item.LastTimestamp, 10),
+		item.Time,
+		strconv.FormatInt(item.LastMsgType, 10),
+		strconv.FormatInt(item.LastMsgSubType, 10),
+		item.LastSender,
+		item.LastSenderDisplayName,
+	}
+}
+
+func favoriteValues(item favorites.Item) []string {
+	return []string{
+		strconv.FormatInt(item.ID, 10),
+		item.Type,
+		strconv.FormatInt(item.TypeCode, 10),
+		item.Time,
+		strconv.FormatInt(item.Timestamp, 10),
+		item.Summary,
+		item.Content,
+		item.URL,
+		favoriteDetailText(item),
+		item.From,
+		item.SourceChat,
+	}
+}
+
+func favoriteDetailText(item favorites.Item) string {
+	if item.ContentDetail == nil {
+		return ""
+	}
+	if status := item.ContentDetail["media_status"]; status != "" {
+		parts := compactCells(status, item.ContentDetail["format"], item.ContentDetail["size"], item.ContentDetail["path"], item.ContentDetail["url"], item.ContentDetail["remote_locator"])
+		return strings.Join(parts, " | ")
+	}
+	return item.ContentDetail["type"]
+}
+
+func compactCells(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func articleAccountValues(item articles.Account) []string {
+	return []string{item.Username, item.Alias, item.Remark, item.NickName, item.Description, item.HeadURL}
+}
+
+func articleValues(item articles.Article) []string {
+	return []string{
+		item.ID,
+		item.AccountUsername,
+		item.AccountDisplayName,
+		item.Time,
+		strconv.FormatInt(item.Timestamp, 10),
+		item.Type,
+		item.Text,
+		item.Title,
+		item.Desc,
+		item.URL,
+		item.SourceUsername,
+		item.SourceDisplayName,
+		item.Nickname,
+		item.MessageID,
+	}
+}
+
+func snsPostValues(item sns.Post) []string {
+	return []string{
+		strconv.FormatInt(item.ID, 10),
+		item.AuthorUsername,
+		item.Time,
+		strconv.FormatInt(item.Timestamp, 10),
+		item.Content,
+		item.Location,
+		strconv.Itoa(item.MediaCount),
+	}
+}
+
+func snsNotificationValues(item sns.Notification) []string {
+	return []string{
+		strconv.FormatInt(item.ID, 10),
+		item.Type,
+		item.FromUsername,
+		item.FromNickName,
+		item.Content,
+		strconv.FormatInt(item.FeedID, 10),
+		item.FeedAuthorUsername,
+		item.FeedPreview,
+		item.Time,
+		strconv.FormatInt(item.Timestamp, 10),
+	}
+}
+
+func writeKeyValues(w io.Writer, fields []string, values []string) error {
+	for i, field := range fields {
+		value := ""
+		if i < len(values) {
+			value = cleanCell(values[i])
+		}
+		if _, err := fmt.Fprintf(w, "%s: %s\n", field, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func contactValue(contact contacts.Contact, field string) string {

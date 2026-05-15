@@ -2,12 +2,14 @@
 
 Weview is a local-first CLI for reading data from the user's own macOS WeChat.
 The V1 implementation is intentionally narrow: initialize supported DB keys,
-decrypt `contact/contact.db` and message-related DBs, run a local daemon for
-cache maintenance, list contacts/groups from the decrypted contact cache, and
-query history for an explicit username from decrypted `message/message_[number].db`
-caches. It also supports a bounded cross-conversation `timeline` query for AI
-and script consumers. Image and video messages should resolve usable local
-media paths automatically.
+decrypt `contact/contact.db`, `session/session.db`, message-related DBs, and
+selected optional data DBs, run a local daemon for cache maintenance, list
+contacts/groups from the decrypted contact cache, query recent/unread/incremental
+sessions, and query history for an explicit username from decrypted
+`message/message_[number].db` caches. It also supports bounded message-content
+`search` and cross-conversation `timeline` queries for AI and script consumers.
+Image, video, file, voice, and local avatar media should resolve usable local
+paths automatically when the supporting caches are available.
 
 ## Collaboration Rules
 
@@ -90,13 +92,22 @@ media paths automatically.
 - `timeline` `matched_chats` is the number of conversations selected by the
   filter, not the number of conversations that have returned messages on the
   current page or within the requested time range.
+- `weview search` searches message content and parsed `content_detail` values.
+  The initial implementation is a local scan over selected conversations; future
+  FTS/index work should be treated as an accelerator, not as part of the item
+  schema contract. JSON output uses the same `{meta, items}` envelope and message
+  item schema as `messages` and `timeline`.
+- `weview sessions`, `weview unread`, and `weview new-messages` read
+  `session/session.db` directly from the local decrypted cache. `new-messages`
+  keeps account-scoped state under `~/.weview/cache/<account>/state/`.
 - Future performance work should be documented as optional TODOs unless the
   product direction explicitly changes. Likely directions are SQL pagination
   pushdown for `messages`, `timeline --explain` / dry-run estimation, batched
   timeline fan-out with stable cursor semantics, and an optional local message
   index. A future FTS5 index should be treated mainly as a `search` accelerator;
   `messages` and `timeline` need ordinary chat/time indexes to become fast.
-- Message `items` from `messages` and `timeline` must share the same schema.
+- Message `items` from `messages`, `timeline`, `search`, and `new-messages` must
+  share the same schema.
   Include chat metadata fields `chat_kind`, `chat_display_name`, `chat_alias`,
   `chat_remark`, and `chat_nick_name`. `chat_display_name` is `remark >
   nick_name > alias > username`; missing contacts fall back to `chat_username`
@@ -105,7 +116,7 @@ media paths automatically.
   convenience parsing. For image and video messages, parse useful XML metadata
   such as md5, length/play length, thumbnail dimensions, and CDN file
   identifiers there. Do not copy CDN AES keys into `content_detail`.
-- `weview messages` resolves image and video usability automatically for
+- `weview messages` resolves image, video, file, and voice usability automatically for
   returned rows. It should resolve local media files from WeChat storage and
   decode supported `.dat` media into `~/.weview/cache/<account>/media/`.
   Put the result in `content_detail`, not a separate top-level `media` object:
@@ -143,7 +154,8 @@ product goal.
   checkpoints the main DB.
 - In V1, the daemon is a cache maintenance service, not a contacts query
   service. It should focus on cache refresh, source DB watching, `health`,
-  `refresh_contacts`, `refresh_messages`, and `stop`.
+  `refresh_contacts`, `refresh_sessions`, `refresh_messages`,
+  `refresh_avatars`, `refresh_favorites`, `refresh_sns`, and `stop`.
 - The only supported daemon CLI forms are `weview daemon`, `weview daemon start`,
   `weview daemon stop`, and `weview daemon status`. Bare `weview daemon` must
   show the same help as `weview daemon --help` and must not start the daemon.
@@ -158,6 +170,21 @@ product goal.
   it may ask the daemon to refresh message caches first; otherwise it may
   refresh message caches in-process. Do not route message queries through the
   daemon in V1.
+- `weview sessions ...` and `weview unread ...` should always read sessions
+  directly from the local decrypted session cache. If `--refresh` is used and
+  the daemon is running, they may ask the daemon to refresh session cache first;
+  otherwise they may refresh session cache in-process.
+- `weview new-messages ...` should use `session/session.db` as the changed-chat
+  index, then read matching message rows directly from local decrypted message
+  caches. Do not route new-message queries through the daemon in V1.
+- `weview favorites ...` should always read favorites directly from the local
+  decrypted favorite cache. If `--refresh` is used and the daemon is running,
+  it may ask the daemon to refresh favorite cache first; otherwise it may
+  refresh favorite cache in-process.
+- `weview sns ...` should always read SNS data directly from the local
+  decrypted SNS cache. If `--refresh` is used and the daemon is running, it may
+  ask the daemon to refresh SNS cache first; otherwise it may refresh SNS cache
+  in-process.
 - `weview timeline ...` should select conversations from the local decrypted
   contact cache and read messages directly from local decrypted message caches.
   If `--refresh` is used, refresh both contact and message caches, preferring
@@ -171,6 +198,10 @@ product goal.
   `~/.weview/cache/<account>/contact/contact.db`
 - Decrypted message cache paths are:
   `~/.weview/cache/<account>/message/message_*.db`
+- Decrypted session cache path is:
+  `~/.weview/cache/<account>/session/session.db`
+- Decrypted head image cache path is:
+  `~/.weview/cache/<account>/head_image/head_image.db`
 - Account key store path is:
   `~/.weview/cache/<account>/keys.json`. Do not use a global
   `~/.weview/keys.json`; keys are account-scoped.
@@ -182,12 +213,14 @@ product goal.
   of one WeChat account and logging into another while the daemon is running
   switches to the new account's key/cache metadata.
 - Supported message-related DBs include numeric正文分片
-  `message/message_[number].db` plus `message/message_fts.db`,
+  `message/message_[number].db` plus `message/biz_message_[number].db`,
+  `message/media_[number].db`, `message/message_fts.db`,
   `message/message_resource.db`, and `message/message_revoke.db`.
 - Required DB keys are `contact/contact.db` plus numeric message shards.
+  `session/session.db`, `head_image/head_image.db`, `message/media_*.db`,
   `message_fts.db`, `message_resource.db`, and `message_revoke.db` are
-  auxiliary and should not block init/cache refresh when their key is not yet
-  present in WeChat process memory.
+  auxiliary/optional and should not block init/cache refresh when their key is
+  not yet present in WeChat process memory.
 - Use readable account directory names, not base64, unless a future account name
   contains unsafe path characters. Unsafe characters should be replaced with `_`.
 - When running under `sudo`, state written under `~/.weview` should be chowned

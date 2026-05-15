@@ -202,6 +202,78 @@ INSERT INTO video_hardlink_info_v4(md5, file_name, file_size, modify_time, dir1,
 	}
 }
 
+func TestResolveFilePathMacOS4(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "wxid_owner_bcc2", "db_storage")
+	chat := "53740852064@chatroom"
+	fileDir := filepath.Join(dir, "wxid_owner_bcc2", "Message", "MessageTemp", md5Hex(chat), "File")
+	if err := os.MkdirAll(fileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(fileDir, "report.pdf")
+	if err := os.WriteFile(filePath, []byte("pdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := `<msg><appmsg><type>6</type><title>report.pdf</title><appattach><fileext>pdf</fileext><totallen>3</totallen></appattach></appmsg></msg>`
+	resolver := NewResolver(dataDir, filepath.Join(dir, "cache"))
+	info := resolver.ResolveFile(chat, 7, 1700000000, int64(6)<<32|49, content, false)
+	if info.Status != "resolved" || info.Path != filePath {
+		t.Fatalf("unexpected file info: %+v, want path %s", info, filePath)
+	}
+}
+
+func TestResolveVoiceFromMediaDB(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "wxid_owner_bcc2", "db_storage")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mediaDB := filepath.Join(dir, "media_0.db")
+	sql := `
+CREATE TABLE Name2Id(user_name TEXT);
+INSERT INTO Name2Id(rowid, user_name) VALUES (9, 'alice');
+CREATE TABLE VoiceInfo(chat_name_id INTEGER, local_id INTEGER, svr_id INTEGER, voice_data BLOB);
+INSERT INTO VoiceInfo(chat_name_id, local_id, svr_id, voice_data) VALUES (9, 7, 0, X'02232153494C4B5F5633616263');
+`
+	if out, err := exec.Command("sqlite3", mediaDB, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create media db: %v: %s", err, out)
+	}
+	resolver := NewResolver(dataDir, filepath.Join(dir, "cache"), mediaDB)
+	info := resolver.ResolveVoice("alice", 7, 0, 34)
+	if info.Status != "resolved" || info.Path == "" {
+		t.Fatalf("unexpected voice info: %+v", info)
+	}
+	data, err := os.ReadFile(info.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(data, []byte("#!SILK_V3")) {
+		t.Fatalf("voice silk prefix was not normalized: %x", data)
+	}
+}
+
+func TestResolveAvatarFromHeadImageDB(t *testing.T) {
+	dir := t.TempDir()
+	headDB := filepath.Join(dir, "head_image.db")
+	sql := `
+CREATE TABLE head_image(username TEXT, image_buffer BLOB);
+INSERT INTO head_image(username, image_buffer) VALUES ('alice', X'FFD8FF00');
+`
+	if out, err := exec.Command("sqlite3", headDB, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create head image db: %v: %s", err, out)
+	}
+	info := ResolveAvatar(headDB, "alice", filepath.Join(dir, "cache"))
+	if info.Status != "resolved" || info.Path == "" {
+		t.Fatalf("unexpected avatar info: %+v", info)
+	}
+	if _, err := os.Stat(info.Path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDecryptXORDatVideo(t *testing.T) {
 	dir := t.TempDir()
 	raw := testMP4Bytes()

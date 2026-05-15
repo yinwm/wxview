@@ -46,7 +46,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	go s.watchContacts(ctx)
+	go s.watchSessions(ctx)
 	go s.watchMessages(ctx)
+	go s.watchHeadImage(ctx)
+	go s.watchFavorites(ctx)
+	go s.watchSNS(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -89,6 +93,18 @@ func (s *Server) refresh(ctx context.Context) error {
 	if err := s.refreshMessages(ctx); err != nil {
 		return err
 	}
+	if err := s.refreshSessions(ctx); err != nil {
+		log.Printf("refresh session cache skipped: %v", err)
+	}
+	if err := s.refreshHeadImage(ctx); err != nil {
+		log.Printf("refresh head_image cache skipped: %v", err)
+	}
+	if err := s.refreshFavorites(ctx); err != nil {
+		log.Printf("refresh favorite cache skipped: %v", err)
+	}
+	if err := s.refreshSNS(ctx); err != nil {
+		log.Printf("refresh sns cache skipped: %v", err)
+	}
 	return nil
 }
 
@@ -105,6 +121,26 @@ func (s *Server) refreshContact(ctx context.Context) error {
 
 func (s *Server) refreshMessages(ctx context.Context) error {
 	_, err := key.EnsureMessageRelatedCaches(ctx)
+	return err
+}
+
+func (s *Server) refreshSessions(ctx context.Context) error {
+	_, _, err := key.EnsureSessionCache(ctx)
+	return err
+}
+
+func (s *Server) refreshHeadImage(ctx context.Context) error {
+	_, _, err := key.EnsureHeadImageCache(ctx)
+	return err
+}
+
+func (s *Server) refreshFavorites(ctx context.Context) error {
+	_, _, err := key.EnsureFavoriteCache(ctx)
+	return err
+}
+
+func (s *Server) refreshSNS(ctx context.Context) error {
+	_, _, err := key.EnsureSNSCache(ctx)
 	return err
 }
 
@@ -148,6 +184,74 @@ func (s *Server) watchMessages(ctx context.Context) {
 	})
 }
 
+func (s *Server) watchSessions(ctx context.Context) {
+	paths := func() []string {
+		target, ok := key.DiscoverSessionDB()
+		if !ok {
+			return nil
+		}
+		return []string{target.DBPath}
+	}
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshSessions(ctx); err != nil {
+			log.Printf("refresh session cache failed: %v", err)
+			return
+		}
+		log.Printf("session cache refreshed")
+	})
+}
+
+func (s *Server) watchHeadImage(ctx context.Context) {
+	paths := func() []string {
+		target, ok := key.DiscoverHeadImageDB()
+		if !ok {
+			return nil
+		}
+		return []string{target.DBPath}
+	}
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshHeadImage(ctx); err != nil {
+			log.Printf("refresh head_image cache failed: %v", err)
+			return
+		}
+		log.Printf("head_image cache refreshed")
+	})
+}
+
+func (s *Server) watchFavorites(ctx context.Context) {
+	paths := func() []string {
+		target, ok := key.DiscoverFavoriteDB()
+		if !ok {
+			return nil
+		}
+		return []string{target.DBPath}
+	}
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshFavorites(ctx); err != nil {
+			log.Printf("refresh favorite cache failed: %v", err)
+			return
+		}
+		log.Printf("favorite cache refreshed")
+	})
+}
+
+func (s *Server) watchSNS(ctx context.Context) {
+	paths := func() []string {
+		target, ok := key.DiscoverSNSDB()
+		if !ok {
+			return nil
+		}
+		return []string{target.DBPath}
+	}
+	WatchFiles(ctx, paths, time.Second, time.Second, func() {
+		if err := s.refreshSNS(ctx); err != nil {
+			log.Printf("refresh sns cache failed: %v", err)
+			return
+		}
+		log.Printf("sns cache refreshed")
+	})
+}
+
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var req Request
@@ -166,6 +270,30 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
 	case ActionRefreshMessages:
 		if err := s.refreshMessages(ctx); err != nil {
+			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionRefreshSessions:
+		if err := s.refreshSessions(ctx); err != nil {
+			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionRefreshAvatars:
+		if err := s.refreshHeadImage(ctx); err != nil {
+			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionRefreshFavorites:
+		if err := s.refreshFavorites(ctx); err != nil {
+			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(Response{OK: true, Message: "refreshed"})
+	case ActionRefreshSNS:
+		if err := s.refreshSNS(ctx); err != nil {
 			_ = json.NewEncoder(conn).Encode(Response{OK: false, Message: err.Error()})
 			return
 		}
